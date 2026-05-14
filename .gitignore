@@ -44,6 +44,12 @@ htmlcov/
 Thumbs.db
 desktop.ini
 
+# Kaide-internal scratch / intel files — local only, never pushed to client-pending repo
+Dossier.md
+Solvo_intel.md
+Solvo_AI_Initial_Dossier.md
+TARGET_BRIEF.md
+
 # Local dev artifacts
 docker-compose.override.yml
 *.local.yml
