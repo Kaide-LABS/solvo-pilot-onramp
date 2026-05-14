@@ -649,7 +649,7 @@ All entries verified 2026-05-13 against PyPI release pages and upstream GitHub r
 - ✅ Anti-Replication surface: no POMDP / Bayesian RL / pricing / explainability / active-learning capabilities introduced.
 - ✅ Slack-only UX: no dashboard or web admin surface introduced.
 
-**Git commit hash (filled at commit time):** `<SHA pending — repository push gated on org-name confirmation, see handoff>`
+**Git commit hash:** `1e94ebe99f71ba69db53a098f13b2a71aac714d3` (initial commit, `Kaide-LABS/solvo-pilot-onramp` on `main`, pushed 2026-05-13). Note: the SHA captures the state *before* this provenance line was backfilled with the SHA itself, since the SHA is unknowable prior to the commit. A follow-up commit will record the backfilled PRD; for handoff purposes the architectural state of the repo is identical at both SHAs.
 
 ---
 
