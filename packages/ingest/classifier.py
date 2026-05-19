@@ -122,7 +122,8 @@ def classify_format(
         if hint != "auto" and hint != fmt:
             _log.warning(
                 "classifier: hint=%s but magic-bytes say %s — trusting magic bytes",
-                hint, fmt,
+                hint,
+                fmt,
             )
         return ClassifiedFormat(detected_format=fmt, confidence=conf, reason=reason)
 
@@ -132,9 +133,7 @@ def classify_format(
 
     sniff = _detect_via_csv_sniff(payload)
     if sniff is not None:
-        return ClassifiedFormat(
-            detected_format=sniff[0], confidence=sniff[1], reason=sniff[2]
-        )
+        return ClassifiedFormat(detected_format=sniff[0], confidence=sniff[1], reason=sniff[2])
 
     # Last-resort: take the extension hit even below the commit threshold so
     # the caller knows what we tried, but mark it 'uncertain' if confidence

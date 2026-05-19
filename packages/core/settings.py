@@ -30,7 +30,7 @@ class Settings(BaseSettings):
     # Postgres
     postgres_dsn_async: str
     postgres_dsn_sync: str
-    expected_alembic_head: str = "0001_initial"
+    expected_alembic_head: str = "0002_reference_data"
 
     # Redis
     redis_url: str

@@ -126,9 +126,7 @@ async def test_multi_fail_first_failure_dictates_exit_code(
     """When multiple validators fail, the first failure's exit code wins (per §6.1)."""
     results = [
         make_validator_result(name="vertex_ai_handshake", passed=False, exit_code=1, detail="x"),
-        make_validator_result(
-            name="postgres_alembic_head", passed=False, exit_code=2, detail="y"
-        ),
+        make_validator_result(name="postgres_alembic_head", passed=False, exit_code=2, detail="y"),
         make_validator_result(
             name="un_locode_table_integrity", passed=True, exit_code=3, detail="z"
         ),

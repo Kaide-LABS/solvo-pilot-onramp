@@ -72,9 +72,7 @@ class _MockClient:
     ],
 )
 @pytest.mark.asyncio
-async def test_extract_smoke_per_fixture(
-    monkeypatch: pytest.MonkeyPatch, filename: str
-) -> None:
+async def test_extract_smoke_per_fixture(monkeypatch: pytest.MonkeyPatch, filename: str) -> None:
     """Each fixture extracts cleanly with a single mocked Vertex AI call."""
     client = _MockClient()
     monkeypatch.setattr(excel_extractor, "get_vertex_client", lambda _settings: client)

@@ -117,25 +117,15 @@ async def _validate_postgres_alembic_head(settings: Settings) -> BootValidatorRe
 async def _validate_un_locode_table_integrity(settings: Settings) -> BootValidatorResult:
     """Validator 3 — UN/LOCODE reference table row count. Exit code 3.
 
-    Phase 1 short-circuit: the un_locode_reference table does not yet exist.
-    When absent, the validator returns passed=True with a "phase1 short-circuit"
-    detail. Phase 3 replaces this short-circuit with the real >= 100_000 check.
+    Phase 3: the Phase 1 short-circuit is removed entirely (PHASE_3_SPEC §6.5).
+    Containers booting against a DB without the un_locode_reference table or
+    with row count < 100,000 fail fast.
     """
 
     async def _do() -> str:
         engine = create_async_engine(settings.postgres_dsn_async, poolclass=None)
         try:
             async with engine.connect() as conn:
-                exists = (
-                    await conn.execute(
-                        text(
-                            "SELECT 1 FROM information_schema.tables "
-                            "WHERE table_name = 'un_locode_reference'"
-                        )
-                    )
-                ).first()
-                if exists is None:
-                    return "table_absent_phase1_short_circuit"
                 result = await conn.execute(text("SELECT count(*) FROM un_locode_reference"))
                 count = int(result.scalar() or 0)
                 if count < 100_000:

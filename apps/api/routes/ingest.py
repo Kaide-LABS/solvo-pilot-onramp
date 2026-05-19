@@ -63,12 +63,20 @@ async def _read_capped(upload: UploadFile) -> bytes:
 
 
 def _enqueue_classify(job_id: str, staging_path: str) -> None:
-    """Send the Celery task. Imported lazily so unit tests can patch this symbol."""
-    from packages.ingest.tasks import classify_format_task, extract_payload_task
+    """Send the Celery task. Imported lazily so unit tests can patch this symbol.
+
+    Phase 3 wiring (PHASE_3_SPEC §6.4): the chain extends through
+    normalize_lanes_task. classify → extract → normalize.
+    """
+    from packages.ingest.tasks import (
+        classify_format_task,
+        extract_payload_task,
+        normalize_lanes_task,
+    )
 
     classify_format_task.apply_async(
         args=(job_id, staging_path),
-        link=extract_payload_task.s(),
+        link=extract_payload_task.s() | normalize_lanes_task.s(),
     )
 
 

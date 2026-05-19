@@ -86,9 +86,7 @@ async def update_job_status(
     values: dict[str, Any] = {"status": new_status}
     if completed:
         values["completed_at"] = datetime.now(UTC)
-    await session.execute(
-        update(OnrampJob).where(OnrampJob.job_id == job_id).values(**values)
-    )
+    await session.execute(update(OnrampJob).where(OnrampJob.job_id == job_id).values(**values))
 
 
 async def insert_output(

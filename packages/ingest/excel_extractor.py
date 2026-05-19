@@ -103,9 +103,7 @@ def _build_prompt(job_id: str, prospect_id: str, cells: list[dict[str, Any]]) ->
     )
 
 
-async def _generate_with_retry(
-    client: Any, contents: str, response_schema: dict[str, Any]
-) -> Any:
+async def _generate_with_retry(client: Any, contents: str, response_schema: dict[str, Any]) -> Any:
     """Call generate_content; retry once with 500ms backoff on transient 5xx errors."""
     from google.genai import types
 
@@ -134,9 +132,7 @@ async def _generate_with_retry(
         except Exception as exc:
             status = getattr(exc, "code", None) or getattr(exc, "status_code", None)
             if attempt == 0 and isinstance(status, int) and 500 <= status < 600:
-                _log.warning(
-                    "excel_extractor: Vertex AI %s on attempt 1; retrying once", status
-                )
+                _log.warning("excel_extractor: Vertex AI %s on attempt 1; retrying once", status)
                 await asyncio.sleep(_RETRY_BACKOFF_SECONDS)
                 continue
             raise

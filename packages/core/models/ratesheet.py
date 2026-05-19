@@ -27,7 +27,12 @@ JobStatusLiteral = Literal[
     "failed",
 ]
 
-FlagReason = Literal["low_confidence", "no_majority", "ambiguous_field"]
+FlagReason = Literal[
+    "low_confidence",
+    "no_majority",
+    "ambiguous_field",
+    "port_obfuscation_unresolved",
+]
 SurchargeBasis = Literal["container", "shipment", "bl", "teu"]
 
 

@@ -57,3 +57,7 @@ docker-compose.override.yml
 *.db
 local_fixtures/
 solvo-pilot-onramp/
+
+# Phase 3 reference-data CSVs — regenerate via `python data/_generate.py`.
+data/un_locode_2024_2.csv
+data/wco_hs6_2022.csv

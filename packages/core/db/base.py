@@ -90,6 +90,46 @@ class OnrampConformalScore(Base):
     ensemble_votes: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
 
 
+class UnLocodeReference(Base):
+    """Canonical UN/LOCODE row. Loaded by scripts/load_un_locode.py.
+
+    See PHASE_3_SPEC.md §5 (migration 0002_reference_data).
+    """
+
+    __tablename__ = "un_locode_reference"
+
+    code: Mapped[str] = mapped_column(Text, primary_key=True)
+    country_code: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    place_name: Mapped[str] = mapped_column(Text, nullable=False)
+    subdivision: Mapped[str | None] = mapped_column(Text, nullable=True)
+    function: Mapped[str] = mapped_column(Text, nullable=False)
+    latitude: Mapped[Decimal | None] = mapped_column(Numeric(6, 4), nullable=True)
+    longitude: Mapped[Decimal | None] = mapped_column(Numeric(7, 4), nullable=True)
+
+
+class WcoHs6Reference(Base):
+    """WCO HS6 commodity-code reference row."""
+
+    __tablename__ = "wco_hs6_reference"
+
+    hs6: Mapped[str] = mapped_column(Text, primary_key=True)
+    chapter: Mapped[str] = mapped_column(Text, nullable=False)
+    heading: Mapped[str] = mapped_column(Text, nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+class CarrierPortAlias(Base):
+    """Carrier-internal port-code alias → canonical UN/LOCODE."""
+
+    __tablename__ = "carrier_port_aliases"
+
+    alias: Mapped[str] = mapped_column(Text, primary_key=True)
+    canonical: Mapped[str] = mapped_column(
+        Text, ForeignKey("un_locode_reference.code"), nullable=False
+    )
+    source: Mapped[str] = mapped_column(Text, nullable=False)
+
+
 class LaneGraphState(Base):
     """LangGraph per-lane transition audit log. See ULTIMATE_PRD §3.6."""
 
