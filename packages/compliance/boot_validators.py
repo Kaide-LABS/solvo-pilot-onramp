@@ -11,7 +11,7 @@ import logging
 import time
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
-from typing import Literal, cast
+from typing import Literal
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
@@ -206,8 +206,8 @@ __all__ = [
     "ExitCode",
     "ValidatorName",
     "run_all_boot_validators",
-    cast(str, _validate_postgres_alembic_head.__name__),
-    cast(str, _validate_un_locode_table_integrity.__name__),
-    cast(str, _validate_vertex_compliance.__name__),
-    cast(str, _validate_vertex_handshake.__name__),
+    _validate_postgres_alembic_head.__name__,
+    _validate_un_locode_table_integrity.__name__,
+    _validate_vertex_compliance.__name__,
+    _validate_vertex_handshake.__name__,
 ]

@@ -22,7 +22,7 @@ async def disable_request_response_logging(settings: Settings, model_id: str) ->
     """
 
     def _sync() -> None:
-        from google.cloud import aiplatform
+        from google.cloud import aiplatform  # type: ignore[attr-defined]
 
         aiplatform.init(
             project=settings.gcp_project_id,
@@ -45,7 +45,7 @@ async def assert_request_response_logging_disabled(settings: Settings, model_id:
     """
 
     def _sync() -> None:
-        from google.cloud import aiplatform
+        from google.cloud import aiplatform  # type: ignore[attr-defined]
 
         aiplatform.init(
             project=settings.gcp_project_id,

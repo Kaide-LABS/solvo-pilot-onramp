@@ -102,7 +102,7 @@ async def test_postgres_alembic_head_passes_on_match(monkeypatch: pytest.MonkeyP
         async def execute(self, *_a: Any, **_kw: Any) -> _Result:
             return _Result()
 
-        async def __aenter__(self) -> "_Conn":
+        async def __aenter__(self) -> _Conn:
             return self
 
         async def __aexit__(self, *_a: Any) -> None:
@@ -138,7 +138,7 @@ async def test_postgres_alembic_head_fails_on_mismatch(monkeypatch: pytest.Monke
         async def execute(self, *_a: Any, **_kw: Any) -> _Result:
             return _Result()
 
-        async def __aenter__(self) -> "_Conn":
+        async def __aenter__(self) -> _Conn:
             return self
 
         async def __aexit__(self, *_a: Any) -> None:
@@ -169,7 +169,7 @@ async def test_un_locode_table_absent_short_circuit(monkeypatch: pytest.MonkeyPa
         async def execute(self, *_a: Any, **_kw: Any) -> _NoRow:
             return _NoRow()
 
-        async def __aenter__(self) -> "_Conn":
+        async def __aenter__(self) -> _Conn:
             return self
 
         async def __aexit__(self, *_a: Any) -> None:

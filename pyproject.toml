@@ -59,6 +59,8 @@ ignore = [
   "RUF012",   # mutable class attributes in test fakes are intentional
   "E501",     # long error messages preserved for diagnostic clarity
   "S607",     # docker / celery used by partial path in tests
+  "B008",     # FastAPI idiom: Depends/File/Form in argument defaults
+  "ASYNC240", # local staging-path I/O (Phase 2 only); Phase 5 swaps to GCS
 ]
 
 [tool.mypy]
@@ -69,8 +71,14 @@ namespace_packages = true
 mypy_path = "."
 
 [[tool.mypy.overrides]]
-module = ["pydifact.*", "openpyxl.*", "google.cloud.*", "google.genai.*", "celery.*"]
+module = ["pydifact.*", "openpyxl.*", "google.cloud", "google.cloud.*", "google.genai.*", "celery.*"]
 ignore_missing_imports = true
+
+# Celery's @task and worker_init.connect decorators are untyped; their wrappers
+# are validated by Celery's own runtime, not by mypy.
+[[tool.mypy.overrides]]
+module = ["packages.ingest.tasks", "apps.worker.boot"]
+disallow_untyped_decorators = false
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
