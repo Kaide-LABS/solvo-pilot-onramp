@@ -16,7 +16,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any, Literal, cast
 
-from pydifact.segmentcollection import Interchange  # type: ignore[import-untyped]
+from pydifact.segmentcollection import Interchange
 
 from packages.compliance.vertex_client import get_vertex_client
 from packages.core.models.ratesheet import (

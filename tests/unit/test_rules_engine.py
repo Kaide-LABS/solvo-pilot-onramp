@@ -86,14 +86,23 @@ def test_r4_inverted_validity_window_rejected() -> None:
 
 
 def test_r5_transit_time_out_of_range_rejected() -> None:
-    rs, violations = apply_hard_rules(_wrap(_lane(transit_time_days=121)), now=_TODAY)
+    """R5 is defense-in-depth: Pydantic Field(le=120) already blocks construction
+    via the validated path. Bypass-construct to exercise the rule engine branch
+    that catches upstream serialization gaps."""
+    bad = _lane()
+    object.__setattr__(bad, "transit_time_days", 121)
+    rs, violations = apply_hard_rules(_wrap(bad), now=_TODAY)
     assert [v.rule_id for v in violations] == ["transit_time_out_of_range"]
     assert rs.lanes == []
 
 
 def test_first_violation_wins() -> None:
-    """A lane that breaks multiple rules is rejected on the FIRST one only."""
-    bad = _lane(base_rate_usd=Decimal("-1"), transit_time_days=200)
+    """A lane that breaks multiple rules is rejected on the FIRST one only.
+
+    R2 (negative rate) + R5 (transit-time-OOR): R1..R7 ordering means R2 fires.
+    transit_time bypass-set since Pydantic blocks le=120 violations.
+    """
+    bad = _lane(base_rate_usd=Decimal("-1"))
+    object.__setattr__(bad, "transit_time_days", 200)
     _rs, violations = apply_hard_rules(_wrap(bad), now=_TODAY)
-    # Order is R1..R7; the negative rate (R2) fires before transit-time (R5).
     assert [v.rule_id for v in violations] == ["negative_base_rate"]

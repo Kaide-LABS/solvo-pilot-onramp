@@ -19,7 +19,7 @@ import asyncio
 import hashlib
 import json
 import logging
-from typing import Any, Literal, cast
+from typing import Any, Literal
 
 from packages.compliance.vertex_client import get_vertex_client
 from packages.core.models.normalization import ConsensusResult, EnsembleVote
@@ -138,8 +138,8 @@ async def conditional_correction(
     client = get_vertex_client(settings)
 
     coros = [
-        _one_correction_call(client, lane, cast(Literal[3, 4], 3), _CORRECTION_TEMPERATURES[0]),
-        _one_correction_call(client, lane, cast(Literal[3, 4], 4), _CORRECTION_TEMPERATURES[1]),
+        _one_correction_call(client, lane, 3, _CORRECTION_TEMPERATURES[0]),
+        _one_correction_call(client, lane, 4, _CORRECTION_TEMPERATURES[1]),
     ]
     results = await asyncio.wait_for(
         asyncio.gather(*coros, return_exceptions=True),
