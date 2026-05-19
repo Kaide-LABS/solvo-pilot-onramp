@@ -1,0 +1,23 @@
+# Implements PHASE_1_SPEC.md §8. Identical builder to Dockerfile.api; different CMD.
+FROM python:3.13-slim AS builder
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
+WORKDIR /app
+RUN pip install --upgrade pip hatchling
+COPY pyproject.toml ./
+COPY apps/ apps/
+COPY packages/ packages/
+COPY migrations/ migrations/
+RUN pip install --prefix=/install ".[dev]"
+
+FROM python:3.13-slim AS runtime
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app
+WORKDIR /app
+COPY --from=builder /install /usr/local
+COPY apps/ apps/
+COPY packages/ packages/
+COPY migrations/ migrations/
+COPY alembic.ini ./
+CMD ["celery", "-A", "apps.worker.celery_app", "worker", "--loglevel=INFO", "--concurrency=4"]
