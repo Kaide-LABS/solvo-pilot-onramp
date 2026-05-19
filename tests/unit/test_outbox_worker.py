@@ -31,8 +31,13 @@ def test_backoff_for_returns_none_after_max_attempts() -> None:
 
 
 def test_lock_pattern_is_set_nx_ex() -> None:
-    """Static check: the lock acquisition uses SET NX EX, not Redlock / WATCH+MULTI."""
+    """Static check: the lock acquisition uses SET NX EX, not Redlock / WATCH+MULTI.
+
+    Strips docstrings/comments before checking forbidden patterns so the
+    self-documenting "NOT Redlock" hint in the module docstring isn't flagged.
+    """
     import inspect
+    import re
 
     from packages.dispatcher import outbox_worker
 
@@ -40,7 +45,10 @@ def test_lock_pattern_is_set_nx_ex() -> None:
     assert "client.set(" in source
     assert "nx=True" in source
     assert "ex=" in source
-    # Negative guarantees.
-    assert "Redlock" not in source
-    assert "WATCH" not in source
-    assert "MULTI" not in source
+
+    # Strip triple-quoted docstrings + single-line comments before negative checks.
+    stripped = re.sub(r'"""[\s\S]*?"""', "", source)
+    stripped = re.sub(r"#.*", "", stripped)
+    assert "Redlock" not in stripped
+    assert "WATCH" not in stripped
+    assert "MULTI" not in stripped

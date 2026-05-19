@@ -75,7 +75,9 @@ async def _drain_once(settings: Settings) -> dict[str, int]:
     """Drain at most BATCH_SIZE undelivered outbox rows. Returns a counter dict."""
     engine = get_async_engine()
     factory = async_sessionmaker(engine, expire_on_commit=False)
-    redis_client = redis_aio.from_url(settings.redis_url, decode_responses=True)
+    redis_client: redis_aio.Redis = redis_aio.from_url(  # type: ignore[no-untyped-call]
+        settings.redis_url, decode_responses=True
+    )
     worker_uuid = uuid.uuid4().hex
     delivered = 0
     failed = 0
@@ -132,6 +134,6 @@ async def _drain_once(settings: Settings) -> dict[str, int]:
 
 
 @celery_app.task(name="tasks.dispatcher.drain_outbox", bind=True, max_retries=0)
-def drain_outbox_task(self: Any) -> dict[str, int]:  # type: ignore[no-untyped-def]
+def drain_outbox_task(self: Any) -> dict[str, int]:
     """Celery-beat-driven outbox drain. Runs every 5 seconds per beat schedule."""
     return asyncio.run(_drain_once(get_settings()))

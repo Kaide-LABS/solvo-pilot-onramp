@@ -34,7 +34,7 @@ async def generate_v4_signed_url(
         )
 
     def _sync() -> tuple[str, datetime]:
-        from google.cloud import storage  # type: ignore[import-not-found]
+        from google.cloud import storage  # type: ignore[attr-defined]
 
         client = storage.Client()
         blob = client.bucket(bucket).blob(blob_name)

@@ -8,6 +8,22 @@ from datetime import UTC, datetime
 
 import pytest
 
+# Collection-time env defaults. The autouse fixture below resets these per
+# test, but they must already be present when test modules are *imported*
+# (e.g. test_outbox_worker imports celery_app which calls get_settings() at
+# module load).
+os.environ.setdefault("ENVIRONMENT", "development")
+os.environ.setdefault("GCP_PROJECT_ID", "test-project")
+os.environ.setdefault("VERTEX_LOCATION", "europe-west4")
+os.environ.setdefault(
+    "POSTGRES_DSN_ASYNC", "postgresql+asyncpg://onramp:onramp@localhost:5432/onramp"
+)
+os.environ.setdefault(
+    "POSTGRES_DSN_SYNC", "postgresql+psycopg2://onramp:onramp@localhost:5432/onramp"
+)
+os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
+os.environ.setdefault("VERTEX_AI_ZDR_ENROLLED", "false")
+
 from packages.core.models.health import BootValidatorResult
 
 

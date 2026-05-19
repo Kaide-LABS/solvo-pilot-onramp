@@ -96,7 +96,7 @@ async def test_postgres_alembic_head_passes_on_match(monkeypatch: pytest.MonkeyP
 
     class _Result:
         def first(self) -> _Row:
-            return _Row("0003_audit_trail")
+            return _Row("0004_intake_review")
 
     class _Conn:
         async def execute(self, *_a: Any, **_kw: Any) -> _Result:
@@ -119,7 +119,7 @@ async def test_postgres_alembic_head_passes_on_match(monkeypatch: pytest.MonkeyP
     result = await bv._validate_postgres_alembic_head(get_settings())
     assert result.passed is True
     assert result.exit_code_on_failure == 2
-    assert "0003_audit_trail" in result.detail
+    assert "0004_intake_review" in result.detail
 
 
 @pytest.mark.asyncio

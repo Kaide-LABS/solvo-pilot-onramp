@@ -15,8 +15,22 @@ from packages.core.db.session import get_async_session
 from packages.core.models.ratesheet import JobStatus, NormalizedRatesheet
 
 
+class _FakeSession:
+    """Minimal stand-in supporting session.begin() + session.execute() for the
+    Phase 5 access_log outbox write inside the route handler."""
+
+    from contextlib import asynccontextmanager as _acm
+
+    @_acm
+    async def begin(self) -> Any:
+        yield self
+
+    async def execute(self, *_a: Any, **_kw: Any) -> None:
+        return None
+
+
 async def _fake_session_dep() -> AsyncIterator[Any]:
-    yield object()
+    yield _FakeSession()
 
 
 def _sample_payload(job_id: str = "j1") -> NormalizedRatesheet:

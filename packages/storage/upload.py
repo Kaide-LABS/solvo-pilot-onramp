@@ -11,7 +11,7 @@ async def upload_blob(
     """Upload `payload` bytes to gs://{bucket}/{blob_name}. Sync SDK wrapped in to_thread."""
 
     def _sync() -> None:
-        from google.cloud import storage  # type: ignore[import-not-found]
+        from google.cloud import storage  # type: ignore[attr-defined]
 
         client = storage.Client()
         blob = client.bucket(bucket).blob(blob_name)
