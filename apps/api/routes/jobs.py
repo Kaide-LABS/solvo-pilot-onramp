@@ -8,8 +8,26 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from packages.core.db.repositories import get_job_status, get_output
 from packages.core.db.session import get_async_session
 from packages.core.models.ratesheet import JobStatus, NormalizedRatesheet
+from packages.ingest.outbox import enqueue_outbox_event
 
 router = APIRouter()
+
+
+async def _record_access(
+    session: AsyncSession, job_id: str, route: str, response_status: int
+) -> None:
+    """Phase 5: emit an access_log outbox row in the caller's transaction."""
+    async with session.begin():
+        await enqueue_outbox_event(
+            session,
+            job_id=job_id,
+            event_type="access_log",
+            payload={
+                "route": route,
+                "response_status": response_status,
+                "principal": "anonymous",
+            },
+        )
 
 
 @router.get(
@@ -25,6 +43,7 @@ async def job_status(
     result = await get_job_status(session, job_id)
     if result is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="job_not_found")
+    await _record_access(session, job_id, "/v1/jobs/{id}/status", 200)
     return result
 
 
@@ -56,4 +75,5 @@ async def job_result(
             status_code=status.HTTP_409_CONFLICT,
             detail="completed_job_missing_output",
         )
+    await _record_access(session, job_id, "/v1/jobs/{id}/result", 200)
     return payload

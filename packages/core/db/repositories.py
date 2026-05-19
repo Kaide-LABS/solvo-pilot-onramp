@@ -116,3 +116,34 @@ async def get_output(session: AsyncSession, job_id: str) -> NormalizedRatesheet 
     if row is None:
         return None
     return NormalizedRatesheet.model_validate(row)
+
+
+async def load_votes_by_lane(session: AsyncSession, job_id: str) -> dict[str, list[dict[str, Any]]]:
+    """Phase 5: load persisted EnsembleVote snapshots keyed by lane_id."""
+    from packages.core.db.base import OnrampConformalScore
+
+    result = await session.execute(
+        select(OnrampConformalScore.lane_id, OnrampConformalScore.ensemble_votes).where(
+            OnrampConformalScore.job_id == job_id
+        )
+    )
+    out: dict[str, list[dict[str, Any]]] = {}
+    for lane_id, payload in result.all():
+        out[lane_id] = payload.get("votes", []) if isinstance(payload, dict) else []
+    return out
+
+
+async def load_consensus(session: AsyncSession, job_id: str, lane_id: str) -> dict[str, Any] | None:
+    """Phase 5: load the persisted ConsensusResult snapshot for one lane."""
+    from packages.core.db.base import OnrampConformalScore
+
+    result = await session.execute(
+        select(OnrampConformalScore.ensemble_votes)
+        .where(OnrampConformalScore.job_id == job_id)
+        .where(OnrampConformalScore.lane_id == lane_id)
+    )
+    row = result.scalar_one_or_none()
+    if row is None or not isinstance(row, dict):
+        return None
+    consensus = row.get("consensus")
+    return consensus if isinstance(consensus, dict) else None

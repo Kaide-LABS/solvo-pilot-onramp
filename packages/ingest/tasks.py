@@ -180,6 +180,12 @@ async def _normalize(job_id: str) -> None:
                 },
             )
         )
+        # Phase 5 carry-forward: persist per-lane EnsembleVote snapshots so
+        # validate_output_task can compute calibrated conformal scores.
+        from packages.ingest.normalizer import _persist_consensus_votes
+
+        await _persist_consensus_votes(session, job_id, consensus_results)
+
         # Phase 4: normalize transitions to "validating", not "completed".
         # validate_output_task owns the final transition + audit_log.
         await update_job_status(session, job_id, new_status="validating")
@@ -230,6 +236,79 @@ async def _validate(job_id: str) -> None:
 
     validated, violations = apply_hard_rules(normalized)
 
+    # Phase 5 carry-forward (PHASE_5_SPEC §6.5 + §7.1):
+    # conformal scoring → conditional correction → clarification.
+    from pathlib import Path
+
+    from packages.core.db.base import OnrampConformalScore
+    from packages.core.db.repositories import load_consensus, load_votes_by_lane
+    from packages.core.models.conformal import ConformalScore
+    from packages.core.models.normalization import ConsensusResult, EnsembleVote
+    from packages.core.models.ratesheet import FlaggedLane
+    from packages.ingest.clarification import draft_clarification
+    from packages.ingest.conformal import (
+        accepts,
+        compute_conformal_score,
+        load_calibration,
+    )
+    from packages.ingest.correction import conditional_correction
+
+    settings = get_settings()
+    calibration = load_calibration(Path("fixtures/conformal_calibration_v1.json"))
+
+    async with factory() as session:
+        votes_payload_by_lane = await load_votes_by_lane(session, job_id)
+
+    # Build EnsembleVote objects per lane for conformal scoring.
+    votes_by_lane: dict[str, list[EnsembleVote]] = {}
+    for lane_id, raw_votes in votes_payload_by_lane.items():
+        votes_by_lane[lane_id] = [EnsembleVote.model_validate(v) for v in raw_votes]
+
+    conformal_by_lane: dict[str, ConformalScore] = {}
+    low_confidence: list[FlaggedLane] = []
+    for lane in validated.lanes:
+        votes = votes_by_lane.get(lane.lane_id, [])
+        if not votes:
+            continue
+        score = compute_conformal_score(lane.lane_id, votes, calibration)
+        conformal_by_lane[lane.lane_id] = score
+        if not accepts(score):
+            low_confidence.append(
+                FlaggedLane(lane=lane, reason="low_confidence", confidence=score.confidence)
+            )
+
+    # Conditional correction for no-majority flagged lanes.
+    correction_triggers = 0
+    surviving_flags: list[FlaggedLane] = []
+    for flagged in validated.flagged_for_review:
+        if flagged.reason != "no_majority":
+            surviving_flags.append(flagged)
+            continue
+        async with factory() as session:
+            prior_payload = await load_consensus(session, job_id, flagged.lane.lane_id)
+        if prior_payload is None:
+            surviving_flags.append(flagged)
+            continue
+        try:
+            prior = ConsensusResult.model_validate(prior_payload)
+        except Exception:
+            surviving_flags.append(flagged)
+            continue
+        corrected = await conditional_correction(prior, settings)
+        correction_triggers += 1
+        if corrected.consensus_lane is None:
+            surviving_flags.append(flagged)
+
+    # Drop low-confidence flags only after correction so we don't double-count.
+    surviving_flags.extend(low_confidence)
+
+    # Clarification text (numeric-free) per surviving flag.
+    clarifications: dict[str, str] = {}
+    for f in surviving_flags:
+        clarifications[f.lane.lane_id] = await draft_clarification(f, settings)
+
+    validated = validated.model_copy(update={"flagged_for_review": surviving_flags})
+
     async with factory() as session, session.begin():
         await session.execute(
             pg_insert(OnrampOutput)
@@ -250,6 +329,27 @@ async def _validate(job_id: str) -> None:
                 },
             )
         )
+        # Update per-lane conformal scores with calibrated confidence values.
+        for lane_id, score in conformal_by_lane.items():
+            await session.execute(
+                pg_insert(OnrampConformalScore)
+                .values(
+                    job_id=job_id,
+                    lane_id=lane_id,
+                    confidence=score.confidence,
+                    ensemble_votes={"calibration_id": score.calibration_id},
+                )
+                .on_conflict_do_update(
+                    index_elements=[
+                        OnrampConformalScore.job_id,
+                        OnrampConformalScore.lane_id,
+                    ],
+                    set_={
+                        "confidence": score.confidence,
+                        "ensemble_votes": {"calibration_id": score.calibration_id},
+                    },
+                )
+            )
         await update_job_status(session, job_id, new_status="completed", completed=True)
         await enqueue_outbox_event(
             session,
@@ -260,6 +360,12 @@ async def _validate(job_id: str) -> None:
                 "violations": [v.rule_id for v in violations],
                 "lane_count": len(validated.lanes),
                 "rejected_count": len(validated.deterministically_rejected),
+                "conformal_summary": {
+                    "scored": len(conformal_by_lane),
+                    "low_confidence": len(low_confidence),
+                },
+                "correction_triggered": correction_triggers,
+                "clarifications": len(clarifications),
             },
         )
 

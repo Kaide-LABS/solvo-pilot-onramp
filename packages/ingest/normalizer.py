@@ -180,6 +180,49 @@ async def _ensemble_for_lane(client: Any, lane: LaneRecord) -> ConsensusResult:
     return majority_consensus(lane.lane_id, votes)
 
 
+async def _persist_consensus_votes(
+    session: AsyncSession,
+    job_id: str,
+    consensus_results: list[ConsensusResult],
+) -> None:
+    """Phase 5 carry-forward: persist EnsembleVote rows into onramp_conformal_scores.
+
+    The `confidence` column is preliminary (0.000); validate_output_task
+    overwrites it with the calibrated conformal score from
+    packages.ingest.conformal.
+    """
+    from decimal import Decimal
+
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+    from packages.core.db.base import OnrampConformalScore
+
+    for consensus in consensus_results:
+        snapshot = {
+            "consensus": consensus.model_dump(mode="json"),
+            "votes": [v.model_dump(mode="json") for v in consensus.votes],
+        }
+        await session.execute(
+            pg_insert(OnrampConformalScore)
+            .values(
+                job_id=job_id,
+                lane_id=consensus.lane_id,
+                confidence=Decimal("0.000"),
+                ensemble_votes=snapshot,
+            )
+            .on_conflict_do_update(
+                index_elements=[
+                    OnrampConformalScore.job_id,
+                    OnrampConformalScore.lane_id,
+                ],
+                set_={
+                    "confidence": Decimal("0.000"),
+                    "ensemble_votes": snapshot,
+                },
+            )
+        )
+
+
 async def normalize_lanes(
     job_id: str,
     extraction: NormalizedRatesheet,

@@ -11,7 +11,9 @@ from apps.api.exceptions import register_exception_handlers
 from apps.api.routes import audit as audit_routes
 from apps.api.routes import health as health_routes
 from apps.api.routes import ingest as ingest_routes
+from apps.api.routes import intake as intake_routes
 from apps.api.routes import jobs as jobs_routes
+from apps.api.routes import slack as slack_routes
 from packages.compliance.boot_validators import run_all_boot_validators
 from packages.core.logging import configure_logging
 from packages.core.settings import get_settings
@@ -51,3 +53,6 @@ app.include_router(ingest_routes.router, prefix="/v1/ingest/ratesheet", tags=["i
 app.include_router(jobs_routes.router, prefix="/v1/jobs", tags=["jobs"])
 # Phase 4: internal audit route — bearer-gated, excluded from /docs.
 app.include_router(audit_routes.router, prefix="/internal/v1/audit", include_in_schema=False)
+# Phase 5: operator-grade intake + Slack webhook.
+app.include_router(intake_routes.router, prefix="/v1/intake", tags=["intake"])
+app.include_router(slack_routes.router, prefix="/v1/webhooks/slack", tags=["slack"])

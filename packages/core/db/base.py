@@ -19,6 +19,7 @@ from sqlalchemy import (
     Numeric,
     PrimaryKeyConstraint,
     Text,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -128,6 +129,25 @@ class CarrierPortAlias(Base):
         Text, ForeignKey("un_locode_reference.code"), nullable=False
     )
     source: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+class OnrampIntakeReview(Base):
+    """Operator-review acknowledgement row. See PHASE_5_SPEC.md §5."""
+
+    __tablename__ = "onramp_intake_reviews"
+    __table_args__ = (UniqueConstraint("job_id", "lane_id", name="uq_intake_review_one_per_lane"),)
+
+    review_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    job_id: Mapped[str] = mapped_column(
+        Text, ForeignKey("onramp_jobs.job_id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    lane_id: Mapped[str] = mapped_column(Text, nullable=False)
+    decision: Mapped[str] = mapped_column(Text, nullable=False)
+    operator_email: Mapped[str] = mapped_column(Text, nullable=False)
+    notes: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    acknowledged_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
 
 
 class OnrampAuditLog(Base):

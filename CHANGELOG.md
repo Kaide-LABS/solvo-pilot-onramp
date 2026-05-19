@@ -1,5 +1,31 @@
 # Changelog
 
+## Phase 5 — Slack + Intake + Signed URLs + Outbox Dispatcher (2026-05-22)
+
+Files added:
+
+- `packages/core/models/{intake,slack}.py` — `IntakeJobRequest`, `IntakeJobResponse`, `ReviewAck`, `SignedUrlResponse`, `SlackSlashCommand`, `SlackEventEnvelope`, `SlackPostResult` (all `extra="forbid"`).
+- `packages/slack/{__init__,signing,block_kit,client,handlers}.py` — pure-Python HMAC verifier (±300 s replay window), Block Kit summary builder with **zero raw-rate embedding**, AsyncWebClient singleton, slash + mention dispatch.
+- `packages/storage/{__init__,signed_url,upload}.py` — V4 signed-URL generator with locked **900 s TTL**.
+- `packages/dispatcher/{__init__,delivery,outbox_worker}.py` — transactional outbox drain with `SET NX EX` Redis lock, exponential backoff (5 s → 30 s → 5 m → 30 m → 2 h → 24 h, stop at 6 attempts), per-event-type idempotent delivery.
+- `apps/api/routes/{intake,slack}.py` — `/v1/intake/jobs` (POST/GET/result-url/review), `/v1/webhooks/slack`.
+- `migrations/versions/0004_intake_review.py` — `onramp_intake_reviews` table.
+- `tests/unit/test_{slack_signing,block_kit,slack_handlers,signed_url,outbox_worker,intake_models,intake_routes,validate_wiring}.py`.
+
+Files modified:
+
+- `packages/ingest/tasks.py` — `_validate` extended with the Phase 4 carry-forward wiring: conformal scoring (per-lane), gated `conditional_correction` for no-majority lanes, `draft_clarification` for surviving flags. All side effects committed in one transaction.
+- `packages/ingest/normalizer.py` — added `_persist_consensus_votes`; `_normalize` now writes per-lane `EnsembleVote` snapshots into `onramp_conformal_scores` so `_validate` has inputs to score.
+- `packages/core/db/repositories.py` — added `load_votes_by_lane`, `load_consensus`.
+- `packages/core/db/base.py` — added `OnrampIntakeReview` ORM model.
+- `packages/core/settings.py` — `expected_alembic_head` → `0004_intake_review`; added `slack_signing_secret`, `slack_bot_token`, `gcs_bucket_outputs`, `gcs_signer_service_account`, `enable_webhook_callbacks`.
+- `apps/api/main.py` — mounted `/v1/intake` and `/v1/webhooks/slack` routers.
+- `apps/api/routes/jobs.py` — every GET emits an `access_log` outbox row in the caller's transaction (transactional audit invariant from Phase 4).
+- `apps/worker/celery_app.py` — registered `tasks.dispatcher.drain_outbox` on a 5-second beat schedule.
+- `pyproject.toml` — added `slack_sdk`, `google-cloud-storage`, `httpx` runtime pins.
+
+Highlights: **Phase 4 wiring closed** — the orphan `conformal.py`, `correction.py`, `clarification.py` modules now have production callers inside `validate_output_task`. The Block Kit summary has **zero raw rates** (Anti-Replication invariant); the test suite asserts `base_rate_usd` literal is absent from rendered output. Outbox dispatcher uses `SET NX EX` exclusively — Redlock / WATCH / MULTI are statically rejected by the test suite. Slack outbound flows through the dispatcher only; no request handler posts to Slack directly.
+
 ## Phase 4 — Stage 4 Validation + EDIFACT + Audit Trail (2026-05-21)
 
 Files added:

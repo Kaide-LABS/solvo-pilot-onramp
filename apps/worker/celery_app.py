@@ -28,5 +28,17 @@ celery_app.conf.update(
     task_send_sent_event=True,
 )
 
-# Phase 2 registers tasks.ingest.classify_format and tasks.ingest.extract_payload.
+# Phase 2 registers tasks.ingest.*; Phase 5 adds packages.dispatcher.
+celery_app.autodiscover_tasks(
+    packages=["packages.ingest", "packages.dispatcher"],
+    related_name="outbox_worker",
+)
 celery_app.autodiscover_tasks(packages=["packages.ingest"], related_name="tasks")
+
+# Phase 5: drain the outbox every 5 seconds.
+celery_app.conf.beat_schedule = {
+    "drain-outbox-every-5s": {
+        "task": "tasks.dispatcher.drain_outbox",
+        "schedule": 5.0,
+    },
+}

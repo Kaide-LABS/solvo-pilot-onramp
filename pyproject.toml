@@ -29,6 +29,10 @@ dependencies = [
   "orjson>=3.10,<4",
   "openpyxl>=3.1.5,<3.2",
   "pydifact==0.2.3",
+  # Phase 5 additions.
+  "slack_sdk>=3.34,<4",
+  "google-cloud-storage>=2.18,<3",
+  "httpx>=0.28,<0.29",
 ]
 
 [project.optional-dependencies]
@@ -62,6 +66,7 @@ ignore = [
   "B008",     # FastAPI idiom: Depends/File/Form in argument defaults
   "ASYNC240", # local staging-path I/O (Phase 2 only); Phase 5 swaps to GCS
   "S106",     # test fixtures use literal tokens; not real credentials
+  "S105",     # test module-level constants used as HMAC secrets in fixtures
 ]
 
 [tool.mypy]

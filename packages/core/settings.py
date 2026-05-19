@@ -30,7 +30,7 @@ class Settings(BaseSettings):
     # Postgres
     postgres_dsn_async: str
     postgres_dsn_sync: str
-    expected_alembic_head: str = "0003_audit_trail"
+    expected_alembic_head: str = "0004_intake_review"
 
     # Redis
     redis_url: str
@@ -43,6 +43,13 @@ class Settings(BaseSettings):
     # return 403. Production deployments supply this via Cloud Run secret ref.
     internal_admin_principal: str = "ops@kaide.so"
     internal_admin_token: str = ""  # empty = route returns 403 unconditionally
+
+    # Phase 5 — Slack + signed URL + dispatcher configuration.
+    slack_signing_secret: str = ""
+    slack_bot_token: str = ""
+    gcs_bucket_outputs: str = "solvo-onramp-outputs"
+    gcs_signer_service_account: str = ""
+    enable_webhook_callbacks: bool = False
 
 
 @lru_cache(maxsize=1)
