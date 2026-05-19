@@ -1,0 +1,83 @@
+# Implements PHASE_6_SPEC.md §6.2 — Cloud Build pipeline (build → push → migrate → deploy).
+
+substitutions:
+  _REGION: "europe-west4"
+
+steps:
+  - id: build-api
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -t
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/solvo/api:$SHORT_SHA
+      - -f
+      - Dockerfile.api
+      - .
+
+  - id: build-worker
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -t
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/solvo/worker:$SHORT_SHA
+      - -f
+      - Dockerfile.worker
+      - .
+
+  - id: build-dispatcher
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -t
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/solvo/dispatcher:$SHORT_SHA
+      - -f
+      - Dockerfile.dispatcher
+      - .
+
+  - id: push-api
+    name: gcr.io/cloud-builders/docker
+    args: ["push", "${_REGION}-docker.pkg.dev/$PROJECT_ID/solvo/api:$SHORT_SHA"]
+  - id: push-worker
+    name: gcr.io/cloud-builders/docker
+    args: ["push", "${_REGION}-docker.pkg.dev/$PROJECT_ID/solvo/worker:$SHORT_SHA"]
+  - id: push-dispatcher
+    name: gcr.io/cloud-builders/docker
+    args: ["push", "${_REGION}-docker.pkg.dev/$PROJECT_ID/solvo/dispatcher:$SHORT_SHA"]
+
+  - id: migrate
+    name: ${_REGION}-docker.pkg.dev/$PROJECT_ID/solvo/api:$SHORT_SHA
+    entrypoint: alembic
+    args: ["upgrade", "head"]
+
+  - id: deploy-api
+    name: gcr.io/cloud-builders/gcloud
+    args:
+      - run
+      - deploy
+      - solvo-onramp-api
+      - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/solvo/api:$SHORT_SHA
+      - --region=${_REGION}
+      - --no-allow-unauthenticated
+
+  - id: deploy-worker
+    name: gcr.io/cloud-builders/gcloud
+    args:
+      - run
+      - deploy
+      - solvo-onramp-worker
+      - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/solvo/worker:$SHORT_SHA
+      - --region=${_REGION}
+      - --no-allow-unauthenticated
+
+  - id: deploy-dispatcher
+    name: gcr.io/cloud-builders/gcloud
+    args:
+      - run
+      - deploy
+      - solvo-onramp-dispatcher-beat
+      - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/solvo/dispatcher:$SHORT_SHA
+      - --region=${_REGION}
+      - --no-allow-unauthenticated
+
+options:
+  logging: CLOUD_LOGGING_ONLY

@@ -6,6 +6,7 @@ Implements PHASE_1_SPEC.md §8 (celery_app.py block).
 from __future__ import annotations
 
 from celery import Celery
+from celery.schedules import crontab
 
 from apps.worker import boot  # noqa: F401  # registers worker_init handler
 from packages.core.settings import get_settings
@@ -34,11 +35,18 @@ celery_app.autodiscover_tasks(
     related_name="outbox_worker",
 )
 celery_app.autodiscover_tasks(packages=["packages.ingest"], related_name="tasks")
+# Phase 6 — daily archive sweep.
+celery_app.autodiscover_tasks(packages=["packages.lifecycle"], related_name="archive")
 
 # Phase 5: drain the outbox every 5 seconds.
+# Phase 6: archive jobs older than 90 days daily (00:00 UTC ≈ 01–02:00 Amsterdam).
 celery_app.conf.beat_schedule = {
     "drain-outbox-every-5s": {
         "task": "tasks.dispatcher.drain_outbox",
         "schedule": 5.0,
+    },
+    "archive-old-daily-00utc": {
+        "task": "tasks.lifecycle.archive_old",
+        "schedule": crontab(hour=0, minute=0),
     },
 }

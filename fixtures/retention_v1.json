@@ -1,0 +1,6 @@
+{
+  "raw_upload_retention_days": 7,
+  "normalized_output_retention_days": 90,
+  "archived_output_ttl_days": 180,
+  "audit_log_retention_days": 365
+}

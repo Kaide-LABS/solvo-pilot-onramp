@@ -1,5 +1,29 @@
 # Changelog
 
+## Phase 6 — Cloud Run deployment + sprint close (2026-05-23)
+
+Files added:
+
+- `packages/core/models/lifecycle.py` — `ArchiveCandidate`, `RetentionAssertion` (retention floors Literal-pinned at 7/90/180/365).
+- `packages/lifecycle/{__init__,archive,retention_enforcer}.py` — daily archive sweep (gzip → Coldline → DELETE), §3.10.3 retention-floor enforcer.
+- `infra/README.md`, `infra/terraform/{main,network,cloud_sql,memorystore,gcs,cloud_run,iam,secrets,variables,outputs}.tf` — declarative IaC bound to europe-west4 (terraform variable validation refuses other regions).
+- `infra/scripts/{deploy,smoke_check,bootstrap_zdr}.sh` + `infra/scripts/archive_90day.py` — one-shot deploy, post-deploy curl, ZDR enrollment flip, manual archive helper.
+- `cloudbuild.yaml` — build → push → migrate → deploy pipeline for three services (api, worker, dispatcher).
+- `Dockerfile.dispatcher` — Cloud Run dispatcher-beat service image (slim-bookworm base).
+- `fixtures/retention_v1.json` — Literal-pinned §3.10.3 retention config consumed by the boot validator.
+- `tests/unit/test_{retention_enforcer,archive_logic}.py` + `tests/integration/test_{cloud_run_smoke,lifecycle_archive}.py`.
+- `docs/{deployment_runbook,compliance_attestation}.md`.
+
+Files modified:
+
+- `apps/api/routes/health.py` — added `/v1/health/ready/cloudrun` (DB + Redis ping only, ≤ 3 s budget) for Cloud Run aggressive probes.
+- `apps/worker/celery_app.py` — registered `tasks.lifecycle.archive_old` on a daily crontab beat schedule.
+- `packages/core/settings.py` — added `gcs_archive_bucket`, `archive_age_days`, `retention_config_path`.
+- `docker-compose.yml` — added `dispatcher` service mirroring the worker image but with `celery beat` entrypoint.
+- `data/_generate.py` — refuses to run when `ENVIRONMENT=production`.
+
+Highlights: **deployment is declarative**. Terraform pins europe-west4 via variable validation; `cloudbuild.yaml` runs `alembic upgrade head` between push and deploy so traffic never flips to a revision built against an unapplied schema. The §3.10.3 retention floors are enforced **twice**: once at Pydantic validation (Literal pins on `RetentionAssertion`), once at terraform-applied GCS lifecycle rules. The new `/v1/health/ready/cloudrun` is intentionally light — Cloud Run's 4 s probe deadline would evict the full four-validator readiness path during cold starts. **No new LLM call sites**, **no new pipeline features**, **no schema migrations** — Phase 6 ships exactly what Phases 1–5 produced, on Cloud Run.
+
 ## Phase 5 — Slack + Intake + Signed URLs + Outbox Dispatcher (2026-05-22)
 
 Files added:

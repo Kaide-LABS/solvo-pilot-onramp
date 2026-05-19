@@ -51,6 +51,13 @@ class Settings(BaseSettings):
     gcs_signer_service_account: str = ""
     enable_webhook_callbacks: bool = False
 
+    # Phase 6 lifecycle / archive configuration. The retention floors are
+    # pinned in packages/core/models/lifecycle.py:RetentionAssertion; these
+    # settings expose the bucket + window for the daily Celery beat task.
+    gcs_archive_bucket: str = "solvo-onramp-archive"
+    archive_age_days: int = 90
+    retention_config_path: str = "fixtures/retention_v1.json"
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:

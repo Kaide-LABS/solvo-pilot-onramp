@@ -121,7 +121,23 @@ def _generate_wco_hs6(path: Path) -> None:
 
 
 def main() -> None:
-    """Generate both CSVs into the data/ directory."""
+    """Generate both CSVs into the data/ directory.
+
+    Phase 6 paranoia: refuses to run when ENVIRONMENT=production. Generator
+    output is synthetic; production should be loaded from a vendored
+    canonical UN/LOCODE snapshot, not from this script.
+    """
+    import os
+    import sys
+
+    if os.environ.get("ENVIRONMENT", "").lower() == "production":
+        print(
+            "refusing to generate synthetic data in production; "
+            "load a vendored UN/LOCODE snapshot instead",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     _generate_un_locode(DATA_DIR / "un_locode_2024_2.csv")
     _generate_wco_hs6(DATA_DIR / "wco_hs6_2022.csv")
