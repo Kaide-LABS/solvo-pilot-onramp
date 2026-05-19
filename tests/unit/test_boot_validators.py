@@ -96,7 +96,7 @@ async def test_postgres_alembic_head_passes_on_match(monkeypatch: pytest.MonkeyP
 
     class _Result:
         def first(self) -> _Row:
-            return _Row("0001_initial")
+            return _Row("0002_reference_data")
 
     class _Conn:
         async def execute(self, *_a: Any, **_kw: Any) -> _Result:
@@ -119,7 +119,7 @@ async def test_postgres_alembic_head_passes_on_match(monkeypatch: pytest.MonkeyP
     result = await bv._validate_postgres_alembic_head(get_settings())
     assert result.passed is True
     assert result.exit_code_on_failure == 2
-    assert "0001_initial" in result.detail
+    assert "0002_reference_data" in result.detail
 
 
 @pytest.mark.asyncio
@@ -158,16 +158,16 @@ async def test_postgres_alembic_head_fails_on_mismatch(monkeypatch: pytest.Monke
 
 
 @pytest.mark.asyncio
-async def test_un_locode_table_absent_short_circuit(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Validator 3 — Phase 1 short-circuits to passed=True when table is absent."""
+async def test_un_locode_strict_passes_at_threshold(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Validator 3 (Phase 3 strict mode) — row count >= 100_000 passes."""
 
-    class _NoRow:
-        def first(self) -> None:
-            return None
+    class _Result:
+        def scalar(self) -> int:
+            return 110_000
 
     class _Conn:
-        async def execute(self, *_a: Any, **_kw: Any) -> _NoRow:
-            return _NoRow()
+        async def execute(self, *_a: Any, **_kw: Any) -> _Result:
+            return _Result()
 
         async def __aenter__(self) -> _Conn:
             return self
@@ -186,7 +186,38 @@ async def test_un_locode_table_absent_short_circuit(monkeypatch: pytest.MonkeyPa
     result = await bv._validate_un_locode_table_integrity(get_settings())
     assert result.passed is True
     assert result.exit_code_on_failure == 3
-    assert "short_circuit" in result.detail
+    assert "un_locode_rows=110000" in result.detail
+
+
+@pytest.mark.asyncio
+async def test_un_locode_strict_fails_below_threshold(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Validator 3 (Phase 3 strict mode) — row count below 100k fails fast (no short-circuit)."""
+
+    class _Result:
+        def scalar(self) -> int:
+            return 99_999
+
+    class _Conn:
+        async def execute(self, *_a: Any, **_kw: Any) -> _Result:
+            return _Result()
+
+        async def __aenter__(self) -> _Conn:
+            return self
+
+        async def __aexit__(self, *_a: Any) -> None:
+            return None
+
+    class _Engine:
+        def connect(self) -> _Conn:
+            return _Conn()
+
+        async def dispose(self) -> None:
+            return None
+
+    monkeypatch.setattr(bv, "create_async_engine", lambda *_a, **_kw: _Engine())
+    result = await bv._validate_un_locode_table_integrity(get_settings())
+    assert result.passed is False
+    assert result.exit_code_on_failure == 3
 
 
 @pytest.mark.asyncio

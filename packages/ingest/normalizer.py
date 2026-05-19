@@ -36,7 +36,7 @@ _log = logging.getLogger(__name__)
 
 # Locked ensemble configuration. NEVER mutate these literals.
 _MODEL_ID: Literal["gemini-3.1-pro-preview"] = "gemini-3.1-pro-preview"
-_TEMPERATURES: tuple[Literal[0.1], Literal[0.5], Literal[0.9]] = (0.1, 0.5, 0.9)
+_TEMPERATURES: tuple[float, float, float] = (0.1, 0.5, 0.9)
 _PER_CALL_TIMEOUT_SECONDS = 20.0
 _TOTAL_BUDGET_SECONDS = 45.0
 _RETRY_BACKOFF_SECONDS = 0.5
@@ -75,10 +75,15 @@ async def _one_pro_call(
     client: Any,
     lane: LaneRecord,
     sample_index: Literal[0, 1, 2, 3, 4],
-    temperature: Literal[0.1, 0.5, 0.9],
+    temperature: float,
     reference_block: str,
 ) -> EnsembleVote:
-    """Run a single Pro call at the given temperature and parse it into a vote."""
+    """Run a single Pro call at the given temperature and parse it into a vote.
+
+    Locked invariant: only called from `_ensemble_for_lane` with temps drawn
+    from the `_TEMPERATURES` triple. Float typing here is forced by PEP 586
+    (Literal disallows floats); the (0.1, 0.5, 0.9) lock lives in module scope.
+    """
     from google.genai import types
 
     config = types.GenerateContentConfig(

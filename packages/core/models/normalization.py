@@ -20,7 +20,9 @@ class EnsembleVote(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     sample_index: Literal[0, 1, 2, 3, 4]
-    temperature: Literal[0.1, 0.5, 0.9]
+    # NOTE: PEP 586 disallows float in Literal[...]; the (0.1, 0.5, 0.9) triple
+    # is enforced at orchestrator boundaries (packages/ingest/normalizer.py).
+    temperature: float = Field(ge=0.0, le=1.0)
     lane: LaneRecord
     raw_response_hash: str = Field(min_length=8, max_length=64)
 
