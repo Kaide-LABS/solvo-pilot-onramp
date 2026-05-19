@@ -151,9 +151,16 @@ async def _validate_vertex_compliance(settings: Settings) -> BootValidatorResult
     2. Reading the configuration back and asserting it is disabled.
     3. In production, requiring VERTEX_AI_ZDR_ENROLLED to be true (the ops
        checklist in docs/compliance_setup.md owns this env var).
+    4. (Phase 6 §6.4) Asserting the §3.10.3 retention floors match the
+       Literal-pinned RetentionAssertion — drift in the JSON config or the
+       terraform-applied GCS lifecycle rule fails boot with exit code 4.
     """
 
     async def _do() -> str:
+        from pathlib import Path
+
+        from packages.lifecycle.retention_enforcer import assert_retention_floors
+
         models_in_scope = ["gemini-3-flash-preview", "gemini-3.1-pro-preview"]
         for model_id in models_in_scope:
             await disable_request_response_logging(settings, model_id)
@@ -162,9 +169,14 @@ async def _validate_vertex_compliance(settings: Settings) -> BootValidatorResult
             raise AssertionError(
                 "ZDR program not enrolled — required for production compliance posture"
             )
+        retention = assert_retention_floors(Path(settings.retention_config_path))
         return (
             f"rrl_disabled=True zdr_enrolled={settings.vertex_ai_zdr_enrolled} "
-            f"models={','.join(m.split('-', 1)[1] for m in models_in_scope)}"
+            f"models={','.join(m.split('-', 1)[1] for m in models_in_scope)} "
+            f"retention=raw{retention.raw_upload_retention_days}d/"
+            f"norm{retention.normalized_output_retention_days}d/"
+            f"arch{retention.archived_output_ttl_days}d/"
+            f"audit{retention.audit_log_retention_days}d"
         )
 
     return await _run_one(

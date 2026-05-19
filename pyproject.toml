@@ -83,7 +83,12 @@ ignore_missing_imports = true
 # Celery's @task and worker_init.connect decorators are untyped; their wrappers
 # are validated by Celery's own runtime, not by mypy.
 [[tool.mypy.overrides]]
-module = ["packages.ingest.tasks", "apps.worker.boot", "packages.dispatcher.outbox_worker"]
+module = [
+  "packages.ingest.tasks",
+  "apps.worker.boot",
+  "packages.dispatcher.outbox_worker",
+  "packages.lifecycle.archive",
+]
 disallow_untyped_decorators = false
 
 [tool.pytest.ini_options]

@@ -71,7 +71,9 @@ async def cloudrun_readiness(request: Request) -> JSONResponse:
         return True
 
     async def _redis_ping() -> bool:
-        client = redis_aio.from_url(settings.redis_url, decode_responses=True)
+        client: redis_aio.Redis = redis_aio.from_url(  # type: ignore[no-untyped-call]
+            settings.redis_url, decode_responses=True
+        )
         try:
             return bool(await client.ping())
         finally:

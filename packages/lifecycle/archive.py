@@ -17,7 +17,7 @@ import gzip
 import json
 import logging
 from datetime import UTC, datetime, timedelta
-from typing import Any, cast
+from typing import Any
 
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -89,7 +89,7 @@ async def archive_completed_jobs(
         candidates.append(
             ArchiveCandidate(
                 job_id=job_id,
-                completed_at=cast(datetime, completed_at),
+                completed_at=completed_at,
                 archive_blob_name=blob_name,
                 source_table="onramp_outputs",
             )
@@ -100,7 +100,7 @@ async def archive_completed_jobs(
 
 
 @celery_app.task(name="tasks.lifecycle.archive_old", bind=True, max_retries=0)
-def archive_old_task(self: Any) -> dict[str, int]:  # type: ignore[no-untyped-def]
+def archive_old_task(self: Any) -> dict[str, int]:
     """Beat-scheduled archive sweep. Returns a counter dict."""
     settings = get_settings()
     candidates = asyncio.run(
