@@ -1,5 +1,29 @@
 # Changelog
 
+## Phase 4 — Stage 4 Validation + EDIFACT + Audit Trail (2026-05-21)
+
+Files added:
+
+- `packages/core/models/{audit,conformal}.py` — `AuditLogEntry`, `AccessLogEntry`, `ConformalScore`, `ConformalCalibration`, `RuleViolation` (all `extra="forbid"`).
+- `packages/ingest/{edifact_extractor,rules_engine,conformal,correction,clarification}.py` — Stage 2 EDIFACT branch (deterministic-first via `pydifact`), pure-Python R1..R7 rules engine, section-granular split conformal at locked 0.85 threshold, conditional N=2 Pro correction at endpoint temps (0.0, 1.0), Pro clarification phrasing with numeric-leak guard.
+- `apps/api/routes/audit.py` — `/internal/v1/audit/{job_id}` bearer-gated, write-on-read access-log audit trail.
+- `migrations/versions/0003_audit_trail.py` — `onramp_audit_log` + `onramp_access_log` tables (append-only at application layer).
+- `fixtures/06_edifact_pricat.edi` — minimal carrier PRICAT for the deterministic-parse path.
+- `fixtures/conformal_calibration_v1.json` — vendored calibration record (64 samples, 0.85 threshold).
+- `tests/unit/test_{rules_engine,conformal,correction,clarification,edifact_extractor,audit_models,audit_route}.py`.
+
+Files modified:
+
+- `packages/ingest/tasks.py` — added `validate_output_task`; extract widens to {excel, edifact}; normalize transitions to `validating`; validate owns the terminal `completed` transition and emits the `stage=validated` audit_log event.
+- `apps/api/routes/ingest.py` — chain extended to `classify → extract → normalize → validate`.
+- `packages/core/models/ratesheet.py` — `FlagReason` literal extended with `"hard_rule_violation"`.
+- `packages/core/db/base.py` — added `OnrampAuditLog`, `OnrampAccessLog` ORM models.
+- `packages/core/settings.py` — `expected_alembic_head` default bumped to `"0003_audit_trail"`; added `internal_admin_principal` + `internal_admin_token`.
+- `packages/ingest/outbox.py` — `OutboxEventType` extended with `"access_log"`.
+- `apps/api/main.py` — mounted `/internal/v1/audit` router (excluded from `/docs`).
+
+Highlights: Stage 4 hard-rules engine is **pure Python — zero LLM calls**, with rules R1..R7 firing in declared order and the first violation winning per lane. Conformal threshold pinned to **0.85 at the Pydantic Literal level**. Conditional Pro correction is **gated strictly on prior consensus.requires_review** — clean consensus skips the escalation entirely (Wan et al. 2408.17017 §3 alignment). Clarification node **strips any numeric output and falls back to a non-numeric prompt** — the Anti-Replication boundary is enforced at the post-processor regex, not at the prompt level alone. EDIFACT path **prefers determinism**: a fully-tokenizable PRICAT message skips the Flash call.
+
 ## Phase 3 — Stage 3 N=3 Pro Ensemble + Reference Data (2026-05-20)
 
 Files added:

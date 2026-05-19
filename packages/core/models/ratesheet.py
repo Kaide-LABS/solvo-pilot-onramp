@@ -32,6 +32,7 @@ FlagReason = Literal[
     "no_majority",
     "ambiguous_field",
     "port_obfuscation_unresolved",
+    "hard_rule_violation",
 ]
 SurchargeBasis = Literal["container", "shipment", "bl", "teu"]
 

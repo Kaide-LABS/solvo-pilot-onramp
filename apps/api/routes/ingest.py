@@ -72,11 +72,13 @@ def _enqueue_classify(job_id: str, staging_path: str) -> None:
         classify_format_task,
         extract_payload_task,
         normalize_lanes_task,
+        validate_output_task,
     )
 
+    # Phase 4 chain: classify → extract → normalize → validate.
     classify_format_task.apply_async(
         args=(job_id, staging_path),
-        link=extract_payload_task.s() | normalize_lanes_task.s(),
+        link=(extract_payload_task.s() | normalize_lanes_task.s() | validate_output_task.s()),
     )
 
 

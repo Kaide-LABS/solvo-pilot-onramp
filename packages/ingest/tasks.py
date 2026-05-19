@@ -41,11 +41,12 @@ async def _classify(job_id: str, staging_path: str) -> str:
     classified = classify_format(payload, path.name, "auto")
 
     factory = async_sessionmaker(get_async_engine(), expire_on_commit=False)
-    if classified.detected_format != "excel":
+    # Phase 4: EDIFACT joins Excel as a supported terminal format.
+    if classified.detected_format not in {"excel", "edifact"}:
         async with factory() as session, session.begin():
             await update_job_status(session, job_id, new_status="failed", completed=True)
         raise ExtractionError(
-            f"format {classified.detected_format!r} not supported in Phase 2 ({classified.reason})"
+            f"format {classified.detected_format!r} not supported in Phase 4 ({classified.reason})"
         )
 
     async with factory() as session, session.begin():
@@ -61,10 +62,14 @@ def classify_format_task(self, job_id: str, staging_path: str) -> dict[str, str]
 
 
 async def _extract(job_id: str, staging_path: str, fmt: str) -> None:
-    """Run Stage 2 extraction and commit the output + outbox row atomically."""
-    if fmt != "excel":
-        # Defense-in-depth: classify_format should have already failed the job.
-        raise ExtractionError(f"Phase 2 extractor only handles 'excel'; got {fmt!r}")
+    """Run Stage 2 extraction and commit the output + outbox row atomically.
+
+    Phase 4 widens the supported set: excel | edifact. Other formats are
+    rejected at the classifier (Phase 4 _classify) — this branch is
+    defense-in-depth.
+    """
+    if fmt not in {"excel", "edifact"}:
+        raise ExtractionError(f"Phase 4 extractor handles 'excel' or 'edifact'; got {fmt!r}")
 
     settings = get_settings()
     factory = async_sessionmaker(get_async_engine(), expire_on_commit=False)
@@ -79,9 +84,22 @@ async def _extract(job_id: str, staging_path: str, fmt: str) -> None:
         prospect_id = job.prospect_id
 
     try:
-        payload, _meta = await extract_excel_payload(
-            Path(staging_path), job_id, prospect_id, settings
-        )
+        if fmt == "edifact":
+            from packages.ingest.edifact_extractor import (
+                EdifactExtractionError,
+                extract_edifact_payload,
+            )
+
+            try:
+                payload, _meta = await extract_edifact_payload(
+                    Path(staging_path), job_id, prospect_id, settings
+                )
+            except EdifactExtractionError as exc:
+                raise ExtractionError(str(exc)) from exc
+        else:
+            payload, _meta = await extract_excel_payload(
+                Path(staging_path), job_id, prospect_id, settings
+            )
     except (ExcelTooLargeError, ExtractionError) as exc:
         async with factory() as session, session.begin():
             await update_job_status(session, job_id, new_status="failed", completed=True)
@@ -162,7 +180,9 @@ async def _normalize(job_id: str) -> None:
                 },
             )
         )
-        await update_job_status(session, job_id, new_status="completed", completed=True)
+        # Phase 4: normalize transitions to "validating", not "completed".
+        # validate_output_task owns the final transition + audit_log.
+        await update_job_status(session, job_id, new_status="validating")
         await enqueue_outbox_event(
             session,
             job_id=job_id,
@@ -176,6 +196,75 @@ async def _normalize(job_id: str) -> None:
 
 
 @celery_app.task(name="tasks.ingest.normalize_lanes", bind=True, max_retries=0)
-def normalize_lanes_task(self, upstream: dict[str, str]) -> None:  # type: ignore[no-untyped-def]
+def normalize_lanes_task(self, upstream: dict[str, str]) -> dict[str, str]:  # type: ignore[no-untyped-def]
     """Stage 3 task — runs the N=3 Pro ensemble + consensus + port resolution."""
     asyncio.run(_normalize(upstream["job_id"]))
+    return {"job_id": upstream["job_id"]}
+
+
+# ---------------------------------------------------------------------------
+# Phase 4 — Stage 4 deterministic validation + conformal + optional clarify.
+# ---------------------------------------------------------------------------
+
+
+async def _validate(job_id: str) -> None:
+    """Stage 4 task body. Implements PHASE_4_SPEC.md §6.6.
+
+    Reads the normalized payload (Phase 3 output), applies hard rules,
+    computes conformal scores from any retained EnsembleVote rows, drafts
+    clarification text for flagged lanes, and writes the final payload + the
+    terminal completed-status + audit_log row in one transaction.
+    """
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+    from packages.core.db.base import OnrampOutput
+    from packages.core.db.repositories import get_output
+    from packages.ingest.rules_engine import apply_hard_rules
+
+    factory = async_sessionmaker(get_async_engine(), expire_on_commit=False)
+
+    async with factory() as session:
+        normalized = await get_output(session, job_id)
+    if normalized is None:
+        raise ExtractionError(f"job {job_id!r} has no normalized output to validate")
+
+    validated, violations = apply_hard_rules(normalized)
+
+    async with factory() as session, session.begin():
+        await session.execute(
+            pg_insert(OnrampOutput)
+            .values(
+                job_id=job_id,
+                normalized_payload=validated.model_dump(mode="json"),
+                lane_count=len(validated.lanes),
+                flagged_count=len(validated.flagged_for_review),
+                rejected_count=len(validated.deterministically_rejected),
+            )
+            .on_conflict_do_update(
+                index_elements=[OnrampOutput.job_id],
+                set_={
+                    "normalized_payload": validated.model_dump(mode="json"),
+                    "lane_count": len(validated.lanes),
+                    "flagged_count": len(validated.flagged_for_review),
+                    "rejected_count": len(validated.deterministically_rejected),
+                },
+            )
+        )
+        await update_job_status(session, job_id, new_status="completed", completed=True)
+        await enqueue_outbox_event(
+            session,
+            job_id=job_id,
+            event_type="audit_log",
+            payload={
+                "stage": "validated",
+                "violations": [v.rule_id for v in violations],
+                "lane_count": len(validated.lanes),
+                "rejected_count": len(validated.deterministically_rejected),
+            },
+        )
+
+
+@celery_app.task(name="tasks.ingest.validate_output", bind=True, max_retries=0)
+def validate_output_task(self, upstream: dict[str, str]) -> None:  # type: ignore[no-untyped-def]
+    """Stage 4 task — deterministic rules engine + conformal + audit_log."""
+    asyncio.run(_validate(upstream["job_id"]))

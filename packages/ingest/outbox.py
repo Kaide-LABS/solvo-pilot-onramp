@@ -19,6 +19,7 @@ OutboxEventType = Literal[
     "webhook_callback",
     "audit_log",
     "signed_url_create",
+    "access_log",
 ]
 
 

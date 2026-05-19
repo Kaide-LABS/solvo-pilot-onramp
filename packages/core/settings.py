@@ -30,13 +30,19 @@ class Settings(BaseSettings):
     # Postgres
     postgres_dsn_async: str
     postgres_dsn_sync: str
-    expected_alembic_head: str = "0002_reference_data"
+    expected_alembic_head: str = "0003_audit_trail"
 
     # Redis
     redis_url: str
 
     # Compliance — see docs/compliance_setup.md for ops responsibilities.
     vertex_ai_zdr_enrolled: bool = False
+
+    # Phase 4 internal-audit route bearer. The bearer is compared against the
+    # GCP service-account email this principal is configured with; mismatches
+    # return 403. Production deployments supply this via Cloud Run secret ref.
+    internal_admin_principal: str = "ops@kaide.so"
+    internal_admin_token: str = ""  # empty = route returns 403 unconditionally
 
 
 @lru_cache(maxsize=1)

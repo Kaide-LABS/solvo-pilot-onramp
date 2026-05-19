@@ -8,6 +8,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from apps.api.exceptions import register_exception_handlers
+from apps.api.routes import audit as audit_routes
 from apps.api.routes import health as health_routes
 from apps.api.routes import ingest as ingest_routes
 from apps.api.routes import jobs as jobs_routes
@@ -48,3 +49,5 @@ register_exception_handlers(app)
 app.include_router(health_routes.router, prefix="/v1/health", tags=["health"])
 app.include_router(ingest_routes.router, prefix="/v1/ingest/ratesheet", tags=["ingest"])
 app.include_router(jobs_routes.router, prefix="/v1/jobs", tags=["jobs"])
+# Phase 4: internal audit route — bearer-gated, excluded from /docs.
+app.include_router(audit_routes.router, prefix="/internal/v1/audit", include_in_schema=False)

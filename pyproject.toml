@@ -61,6 +61,7 @@ ignore = [
   "S607",     # docker / celery used by partial path in tests
   "B008",     # FastAPI idiom: Depends/File/Form in argument defaults
   "ASYNC240", # local staging-path I/O (Phase 2 only); Phase 5 swaps to GCS
+  "S106",     # test fixtures use literal tokens; not real credentials
 ]
 
 [tool.mypy]
