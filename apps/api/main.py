@@ -9,6 +9,8 @@ from fastapi import FastAPI
 
 from apps.api.exceptions import register_exception_handlers
 from apps.api.routes import health as health_routes
+from apps.api.routes import ingest as ingest_routes
+from apps.api.routes import jobs as jobs_routes
 from packages.compliance.boot_validators import run_all_boot_validators
 from packages.core.logging import configure_logging
 from packages.core.settings import get_settings
@@ -44,3 +46,5 @@ app = FastAPI(
 )
 register_exception_handlers(app)
 app.include_router(health_routes.router, prefix="/v1/health", tags=["health"])
+app.include_router(ingest_routes.router, prefix="/v1/ingest/ratesheet", tags=["ingest"])
+app.include_router(jobs_routes.router, prefix="/v1/jobs", tags=["jobs"])

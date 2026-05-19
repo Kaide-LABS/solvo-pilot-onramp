@@ -28,4 +28,5 @@ celery_app.conf.update(
     task_send_sent_event=True,
 )
 
-# Phase 1: no tasks registered. Phases 2–4 add them under packages.ingest.
+# Phase 2 registers tasks.ingest.classify_format and tasks.ingest.extract_payload.
+celery_app.autodiscover_tasks(packages=["packages.ingest"], related_name="tasks")
