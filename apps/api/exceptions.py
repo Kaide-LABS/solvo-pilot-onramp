@@ -24,21 +24,10 @@ async def validation_error_handler(request: Request, exc: Exception) -> JSONResp
     )
 
 
-async def system_exit_handler(request: Request, exc: Exception) -> JSONResponse:
-    """Defensive 503 if SystemExit ever escapes a request path.
-
-    Should be unreachable in steady state — boot SystemExit halts the worker
-    before any traffic arrives.
-    """
-    assert isinstance(exc, SystemExit)
-    return JSONResponse(
-        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-        content={"error": "boot_failure", "exit_code": exc.code},
-    )
-
-
 def register_exception_handlers(app: FastAPI) -> None:
     """Wire the handlers onto the FastAPI app."""
     app.add_exception_handler(RequestValidationError, validation_error_handler)
     app.add_exception_handler(ValidationError, validation_error_handler)
-    app.add_exception_handler(SystemExit, system_exit_handler)
+    # SystemExit is BaseException (not Exception); starlette's middleware rejects
+    # such handlers. Boot-time SystemExit halts the container before requests
+    # arrive, so no request-path handler is needed.
