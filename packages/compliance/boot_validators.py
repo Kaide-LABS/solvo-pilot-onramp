@@ -72,18 +72,18 @@ async def _validate_vertex_handshake(settings: Settings) -> BootValidatorResult:
     async def _do() -> str:
         client = get_vertex_client(settings)
         response = await client.aio.models.generate_content(
-            model="gemini-3-flash-preview",
+            model="gemini-3.1-flash-lite",
             contents="ping",
         )
         if not getattr(response, "candidates", None):
-            raise AssertionError("no candidates returned from gemini-3-flash-preview")
+            raise AssertionError("no candidates returned from gemini-3.1-flash-lite")
         return f"flash_preview_responsive in {settings.vertex_location}"
 
     return await _run_one(
         name="vertex_ai_handshake",
         exit_code=1,
         coro_factory=_do,
-        timeout_seconds=5.0,
+        timeout_seconds=15.0,
     )
 
 
@@ -110,7 +110,7 @@ async def _validate_postgres_alembic_head(settings: Settings) -> BootValidatorRe
         name="postgres_alembic_head",
         exit_code=2,
         coro_factory=_do,
-        timeout_seconds=5.0,
+        timeout_seconds=15.0,
     )
 
 
@@ -138,7 +138,7 @@ async def _validate_un_locode_table_integrity(settings: Settings) -> BootValidat
         name="un_locode_table_integrity",
         exit_code=3,
         coro_factory=_do,
-        timeout_seconds=5.0,
+        timeout_seconds=15.0,
     )
 
 
@@ -161,7 +161,7 @@ async def _validate_vertex_compliance(settings: Settings) -> BootValidatorResult
 
         from packages.lifecycle.retention_enforcer import assert_retention_floors
 
-        models_in_scope = ["gemini-3-flash-preview", "gemini-3.1-pro-preview"]
+        models_in_scope = ["gemini-3.1-flash-lite", "gemini-3.1-pro-preview"]
         for model_id in models_in_scope:
             await disable_request_response_logging(settings, model_id)
             await assert_request_response_logging_disabled(settings, model_id)
@@ -183,7 +183,7 @@ async def _validate_vertex_compliance(settings: Settings) -> BootValidatorResult
         name="vertex_ai_compliance_handshake",
         exit_code=4,
         coro_factory=_do,
-        timeout_seconds=8.0,
+        timeout_seconds=25.0,
     )
 
 

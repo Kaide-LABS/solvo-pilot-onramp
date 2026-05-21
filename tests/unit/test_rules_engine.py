@@ -19,7 +19,7 @@ _TODAY = datetime(2026, 5, 21, tzinfo=UTC)
 
 def _meta() -> ExtractionMetadata:
     return ExtractionMetadata(
-        extractor_model="gemini-3-flash-preview",
+        extractor_model="gemini-3.1-flash-lite",
         extracted_at=_TODAY,
         prompt_version="t1",
         cell_count=10,

@@ -38,7 +38,7 @@ def _rs(with_flag: bool = True) -> NormalizedRatesheet:
         job_id="job-1",
         prospect_id="ACME",
         extraction_metadata=ExtractionMetadata(
-            extractor_model="gemini-3-flash-preview",
+            extractor_model="gemini-3.1-flash-lite",
             extracted_at=datetime.now(UTC),
             prompt_version="v1",
             cell_count=1,
@@ -100,7 +100,7 @@ def test_summary_caps_flagged_reasons_at_three() -> None:
         job_id="job-1",
         prospect_id="ACME",
         extraction_metadata=ExtractionMetadata(
-            extractor_model="gemini-3-flash-preview",
+            extractor_model="gemini-3.1-flash-lite",
             extracted_at=datetime.now(UTC),
             prompt_version="v1",
             cell_count=1,

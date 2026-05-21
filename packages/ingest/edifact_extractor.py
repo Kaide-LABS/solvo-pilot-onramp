@@ -30,7 +30,7 @@ from packages.core.settings import Settings
 
 _log = logging.getLogger(__name__)
 
-_MODEL_ID: Literal["gemini-3-flash-preview"] = "gemini-3-flash-preview"
+_MODEL_ID: Literal["gemini-3.1-flash-lite"] = "gemini-3.1-flash-lite"
 _TEMPERATURE = 0.0  # purely structural extraction for EDIFACT
 _TIMEOUT_SECONDS = 20.0
 

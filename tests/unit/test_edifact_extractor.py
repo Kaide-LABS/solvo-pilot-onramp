@@ -25,5 +25,5 @@ async def test_pricat_fixture_parses_deterministically_with_zero_llm_calls() -> 
     assert payload.lanes[0].destination_port.code == "USNYC"
     assert payload.lanes[1].equipment_type == "40HC"
     assert payload.lanes[2].equipment_type == "20GP"
-    assert meta.extractor_model == "gemini-3-flash-preview"
+    assert meta.extractor_model == "gemini-3.1-flash-lite"
     assert payload.schema_version == "onramp.v1"

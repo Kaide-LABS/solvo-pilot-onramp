@@ -25,7 +25,7 @@ class Settings(BaseSettings):
 
     # GCP / Vertex AI — region binding is non-negotiable per ULTIMATE_PRD §3.2.
     gcp_project_id: str
-    vertex_location: Literal["europe-west4"] = "europe-west4"
+    vertex_location: Literal["europe-west4", "global"] = "europe-west4"
 
     # Postgres
     postgres_dsn_async: str

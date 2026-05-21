@@ -76,7 +76,7 @@ class ExtractionMetadata(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    extractor_model: Literal["gemini-3-flash-preview"]
+    extractor_model: Literal["gemini-3.1-flash-lite"]
     extracted_at: datetime
     prompt_version: str = Field(min_length=1, max_length=32)
     cell_count: int = Field(ge=0, le=5_000)

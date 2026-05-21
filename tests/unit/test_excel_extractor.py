@@ -37,7 +37,7 @@ def _canned_payload(job_id: str = "j1", prospect_id: str = "p123") -> dict[str, 
         "job_id": job_id,
         "prospect_id": prospect_id,
         "extraction_metadata": {
-            "extractor_model": "gemini-3-flash-preview",
+            "extractor_model": "gemini-3.1-flash-lite",
             "extracted_at": "2026-05-19T12:00:00+00:00",
             "prompt_version": "stage2.excel.v1",
             "cell_count": 1,
@@ -82,7 +82,7 @@ async def test_extract_smoke_per_fixture(monkeypatch: pytest.MonkeyPatch, filena
     assert client.aio.models.calls == 1
     assert payload.job_id == "j1"
     assert payload.prospect_id == "p123"
-    assert metadata.extractor_model == "gemini-3-flash-preview"
+    assert metadata.extractor_model == "gemini-3.1-flash-lite"
     assert metadata.prompt_version == "stage2.excel.v1"
     assert payload.schema_version == "onramp.v1"
 

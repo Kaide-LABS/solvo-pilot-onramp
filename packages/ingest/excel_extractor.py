@@ -1,7 +1,7 @@
 """Stage 2 — Excel extractor. Implements PHASE_2_SPEC.md §6.2.
 
 Reads .xlsx via openpyxl (read_only, data_only), produces a structured cell
-list (NOT the raw blob), and asks gemini-3-flash-preview to return a
+list (NOT the raw blob), and asks gemini-3.1-flash-lite to return a
 NormalizedRatesheet that conforms to the strict-forbid response schema.
 """
 
@@ -32,7 +32,7 @@ _log = logging.getLogger(__name__)
 _CELL_LIMIT = 5_000
 _VERTEX_BUDGET_SECONDS = 30.0
 _RETRY_BACKOFF_SECONDS = 0.5
-_MODEL_ID = "gemini-3-flash-preview"
+_MODEL_ID = "gemini-3.1-flash-lite"
 _TEMPERATURE = 0.1
 
 
@@ -183,7 +183,7 @@ async def extract_excel_payload(
     # provenance record.
     extracted_at = datetime.now(UTC)
     metadata = ExtractionMetadata(
-        extractor_model=cast(Literal["gemini-3-flash-preview"], _MODEL_ID),
+        extractor_model=cast(Literal["gemini-3.1-flash-lite"], _MODEL_ID),
         extracted_at=extracted_at,
         prompt_version=PROMPT_VERSION,
         cell_count=len(cells),

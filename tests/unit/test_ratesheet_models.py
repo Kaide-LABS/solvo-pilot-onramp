@@ -40,7 +40,7 @@ def _valid_examples() -> dict[type[BaseModel], dict[str, object]]:
         "source_row_reference": src_row,
     }
     metadata = {
-        "extractor_model": "gemini-3-flash-preview",
+        "extractor_model": "gemini-3.1-flash-lite",
         "extracted_at": "2026-05-19T12:00:00+00:00",
         "prompt_version": "stage2.excel.v1",
         "cell_count": 25,

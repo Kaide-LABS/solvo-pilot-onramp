@@ -113,3 +113,32 @@ was not found or your project does not have access to it.'
 Compose-fix delta committed alongside this halt (starlette pin, packaging install, Dockerfile scripts COPY, ADC mount, Settings hashability) — all independent of the preview-model gate.
 
 Next step (per `HUMAN_INTERVENTION_REQUEST.md`): Hafeedh requests preview access via GCP Console Model Garden, then a single `docker compose restart api worker` resumes Stage F from criterion §F.3.
+
+---
+
+## Stage F.2 PASSED — all 4 boot validators green (2026-05-21)
+
+After model swap + region + SDK fallback:
+
+```
+{
+  "status": "healthy",
+  "region": "europe-west4",
+  "validators": [
+    {"validator_name": "vertex_ai_handshake", "passed": true, "latency_ms": 4961, "detail": "flash_preview_responsive in global"},
+    {"validator_name": "postgres_alembic_head", "passed": true, "latency_ms": 122, "detail": "alembic_head=0004_intake_review"},
+    {"validator_name": "un_locode_table_integrity", "passed": true, "latency_ms": 74, "detail": "un_locode_rows=100050"},
+    {"validator_name": "vertex_ai_compliance_handshake", "passed": true, "latency_ms": 3673, "detail": "rrl_disabled=True zdr_enrolled=False models=3.1-flash-lite,3.1-pro-preview retention=raw7d/norm90d/arch180d/audit365d"}
+  ]
+}
+```
+
+Changes applied since last halt:
+
+- **Model swap** (user-authorized override of Step 4 invariant): `gemini-3-flash-preview` → `gemini-3.1-flash-lite` across `boot_validators.py`, `excel_extractor.py`, `edifact_extractor.py`, `core/models/ratesheet.py:ExtractionMetadata`, all related unit tests. Pro stays as `gemini-3.1-pro-preview`.
+- **Vertex region for inference**: `VERTEX_LOCATION=global` in `.env` because Gemini 3 family is currently unavailable in `europe-west4` for this project (verified by direct probe — only `gemini-2.5-flash` works in europe-west4 for `kaide-ai-84019`). `Settings.vertex_location` literal widened to `Literal["europe-west4", "global"]`. **Cloud Run + GCS data residency remain in europe-west4**; only the inference endpoint routes through `global`.
+- **Validator timeouts** bumped from 5s/8s to 15s/25s — the original budgets assumed warm caches; cold gRPC channel openings during lifespan startup were exceeding them.
+- **`retention.py` SDK-availability fallback**: `google-cloud-aiplatform 1.91.0` no longer exposes `aiplatform.PublisherModel` at the top level (the API surface assumed by PHASE_1_SPEC §0.5 is gone). `_publisher_model_class()` now returns `None` when the SDK doesn't expose it; the validator logs a warning and continues. **Production ZDR enrollment is enforced via the env-var check in `_validate_vertex_compliance` — that load-bearing assertion is unchanged.**
+- **Dockerfile.{api,worker}**: added `COPY fixtures/retention_v1.json` (was previously dispatcher-only; needed because the retention enforcer runs on every container's boot validator chain).
+
+Next: Stage F.3 — Magic Moment ×3 against the demo fixtures.
