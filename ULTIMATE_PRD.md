@@ -259,6 +259,8 @@ config = types.GenerateContentConfig(
 
 All Vertex AI calls bind to europe-west4 (already specified in §3.4; repeated here for compliance documentation). All Cloud Run services in §3.1 bind to europe-west4. Cloud SQL Postgres and Memorystore Redis bind to europe-west4. Cloud Storage bucket `solvo-onramp-artifacts` configured with single-region storage class in europe-west4. No data crosses region boundaries under any execution path.
 
+**Addendum (Sprint 2 deployment, 2026-05-21):** Gemini 3 family models are not yet GA in europe-west4 as of the Sprint 2 deployment date. The Pilot Onramp routes Stage 2 (`gemini-3.1-flash-lite`) and Stage 3 (`gemini-3.1-pro-preview`) inference calls via `location='global'` until europe-west4 GA lands (anticipated Q3 2026 based on Google's typical 60–90 day rollout from global to regional). All other architecture surfaces — Cloud Run services, Cloud SQL, Memorystore Redis, Cloud Storage buckets, Postgres data persistence, audit trail — remain bound to europe-west4. The global endpoint is documented in this PRD addendum and surfaced in the §5 sales-frame language for transparency to prospects with strict regional-binding requirements. Customer-side single-tenant deployment per §3.10.6 supports prospect-controlled regional routing as a Phase 2 escalation path for engagements that cannot accept global-endpoint routing under their compliance posture.
+
 #### 3.10.3 Retention windows
 
 | Data type | Storage | Default retention | Customer-configurable |
