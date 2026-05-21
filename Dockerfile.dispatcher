@@ -5,20 +5,23 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1
 WORKDIR /app
 RUN pip install --no-cache-dir --upgrade pip hatchling
-COPY pyproject.toml ./
+COPY pyproject.toml README.md ./
 COPY apps/ apps/
 COPY packages/ packages/
 COPY migrations/ migrations/
-RUN pip install --no-cache-dir --prefix=/install ".[dev]"
+COPY scripts/ scripts/
+RUN pip install --no-cache-dir --prefix=/install ".[dev]" "packaging>=24.0"
 
 FROM python:3.13-slim-bookworm AS runtime
 ENV PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app
 WORKDIR /app
 COPY --from=builder /install /usr/local
+RUN pip install --no-cache-dir "packaging>=24.0"
 COPY apps/ apps/
 COPY packages/ packages/
 COPY migrations/ migrations/
+COPY scripts/ scripts/
 COPY alembic.ini ./
 COPY fixtures/retention_v1.json fixtures/retention_v1.json
 # Single process that runs both the beat scheduler and a single worker thread.

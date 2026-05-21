@@ -88,3 +88,28 @@ Provisioning steps completed via Step 4 Unblock Resume prompt:
 Artifacts kept in-repo: `slack-app-manifest.yaml` (no secrets — manifest only). All raw tokens, OAuth codes, and the create-response credential cache wiped from `$HOME` after `.env` patch.
 
 Next: re-run Step 4 Stages 1–5 against the provisioned environment.
+
+---
+
+## Stage F halted — Vertex preview-model 404 (2026-05-21)
+
+Stage F.1 (pre-flight) and F.2 (boot validators) ran. Result:
+- ✅ postgres, redis, dispatcher healthy
+- ✅ alembic head = `0004_intake_review`
+- ✅ `un_locode_reference` row count = 100,050 (clears the 100k floor)
+- ❌ `vertex_ai_handshake` — TimeoutError (underlying: `gemini-3-flash-preview` returns 404)
+- ❌ `vertex_ai_compliance_handshake` — TimeoutError (same upstream)
+
+Direct probe from inside the api container with mounted ADC reproduces the 404 cleanly:
+
+```
+google.genai.errors.ClientError: 404 NOT_FOUND. 'Publisher Model
+projects/kaide-ai-84019/locations/europe-west4/publishers/google/models/gemini-3-flash-preview
+was not found or your project does not have access to it.'
+```
+
+`kaide-ai-84019` is not on the Gemini 3 preview allowlist. Both `gemini-3-flash-preview` and `gemini-3.1-pro-preview` are model-garden-gated previews.
+
+Compose-fix delta committed alongside this halt (starlette pin, packaging install, Dockerfile scripts COPY, ADC mount, Settings hashability) — all independent of the preview-model gate.
+
+Next step (per `HUMAN_INTERVENTION_REQUEST.md`): Hafeedh requests preview access via GCP Console Model Garden, then a single `docker compose restart api worker` resumes Stage F from criterion §F.3.

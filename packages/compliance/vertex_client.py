@@ -7,7 +7,6 @@ this factory is ever called.
 
 from __future__ import annotations
 
-from functools import lru_cache
 from typing import TYPE_CHECKING
 
 from packages.core.settings import Settings
@@ -15,17 +14,27 @@ from packages.core.settings import Settings
 if TYPE_CHECKING:
     from google.genai import Client
 
+# Module-level singleton. Settings is not hashable so lru_cache(settings) raises
+# TypeError; we cache by gcp_project_id + vertex_location instead.
+_client_cache: dict[tuple[str, str], Client] = {}
 
-@lru_cache(maxsize=1)
+
 def get_vertex_client(settings: Settings) -> Client:
     """Return a singleton Vertex AI client bound to europe-west4.
 
-    The lru_cache ensures we open the gRPC channel exactly once per process.
+    Caches by (project, location) so the gRPC channel opens at most once per
+    distinct configuration. Settings (Pydantic BaseSettings) is unhashable so
+    we cannot use lru_cache directly.
     """
-    from google import genai
+    key = (settings.gcp_project_id, settings.vertex_location)
+    client = _client_cache.get(key)
+    if client is None:
+        from google import genai
 
-    return genai.Client(
-        vertexai=True,
-        project=settings.gcp_project_id,
-        location=settings.vertex_location,
-    )
+        client = genai.Client(
+            vertexai=True,
+            project=settings.gcp_project_id,
+            location=settings.vertex_location,
+        )
+        _client_cache[key] = client
+    return client

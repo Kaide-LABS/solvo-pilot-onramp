@@ -5,8 +5,8 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-onramp}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-onramp}
       POSTGRES_DB: ${POSTGRES_DB:-onramp}
-    ports:
-      - "5432:5432"
+    # No host port mapping — internal network only. Phase 6 host-only debug
+    # can add `-p 15432:5432` ad hoc; default avoids collisions with a host pg.
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -18,8 +18,7 @@ services:
   redis:
     image: redis:7.4-alpine
     command: ["redis-server", "--save", "", "--appendonly", "no"]
-    ports:
-      - "6379:6379"
+    # No host port mapping — internal network only.
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 2s
@@ -35,6 +34,9 @@ services:
       POSTGRES_DSN_ASYNC: postgresql+asyncpg://${POSTGRES_USER:-onramp}:${POSTGRES_PASSWORD:-onramp}@postgres:5432/${POSTGRES_DB:-onramp}
       POSTGRES_DSN_SYNC: postgresql+psycopg2://${POSTGRES_USER:-onramp}:${POSTGRES_PASSWORD:-onramp}@postgres:5432/${POSTGRES_DB:-onramp}
       REDIS_URL: redis://redis:6379/0
+      GOOGLE_APPLICATION_CREDENTIALS: /gcp-adc/application_default_credentials.json
+    volumes:
+      - ${USERPROFILE:-${HOME}}/AppData/Roaming/gcloud:/gcp-adc:ro
     ports:
       - "8000:8000"
     depends_on:
@@ -58,6 +60,9 @@ services:
       POSTGRES_DSN_ASYNC: postgresql+asyncpg://${POSTGRES_USER:-onramp}:${POSTGRES_PASSWORD:-onramp}@postgres:5432/${POSTGRES_DB:-onramp}
       POSTGRES_DSN_SYNC: postgresql+psycopg2://${POSTGRES_USER:-onramp}:${POSTGRES_PASSWORD:-onramp}@postgres:5432/${POSTGRES_DB:-onramp}
       REDIS_URL: redis://redis:6379/0
+      GOOGLE_APPLICATION_CREDENTIALS: /gcp-adc/application_default_credentials.json
+    volumes:
+      - ${USERPROFILE:-${HOME}}/AppData/Roaming/gcloud:/gcp-adc:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -79,6 +84,9 @@ services:
       POSTGRES_DSN_ASYNC: postgresql+asyncpg://${POSTGRES_USER:-onramp}:${POSTGRES_PASSWORD:-onramp}@postgres:5432/${POSTGRES_DB:-onramp}
       POSTGRES_DSN_SYNC: postgresql+psycopg2://${POSTGRES_USER:-onramp}:${POSTGRES_PASSWORD:-onramp}@postgres:5432/${POSTGRES_DB:-onramp}
       REDIS_URL: redis://redis:6379/0
+      GOOGLE_APPLICATION_CREDENTIALS: /gcp-adc/application_default_credentials.json
+    volumes:
+      - ${USERPROFILE:-${HOME}}/AppData/Roaming/gcloud:/gcp-adc:ro
     depends_on:
       postgres:
         condition: service_healthy
