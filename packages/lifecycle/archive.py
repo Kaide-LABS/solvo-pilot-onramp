@@ -24,7 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from apps.worker.celery_app import celery_app
 from packages.core.db.base import OnrampJob, OnrampOutput
-from packages.core.db.session import get_async_engine
+from packages.core.db.session import make_async_engine
 from packages.core.models.lifecycle import ArchiveCandidate
 from packages.core.settings import Settings, get_settings
 from packages.storage.upload import upload_blob
@@ -63,37 +63,43 @@ async def archive_completed_jobs(
     function returns the candidate list so the caller can compose its own
     transactional audit event.
     """
-    factory = async_sessionmaker(get_async_engine(), expire_on_commit=False)
+    # Phase 6.5 (§6.1): per-call engine + dispose. Beat-scheduled, runs under
+    # `asyncio.run`, so the engine cannot outlive this coroutine.
+    engine = make_async_engine(settings)
     candidates: list[ArchiveCandidate] = []
+    try:
+        factory = async_sessionmaker(engine, expire_on_commit=False)
 
-    async with factory() as session:
-        rows = await _select_candidates(session, age_days)
+        async with factory() as session:
+            rows = await _select_candidates(session, age_days)
 
-    for job_id, completed_at, payload in rows:
-        blob_name = _blob_name(job_id)
-        gzipped = gzip.compress(json.dumps(payload).encode("utf-8"))
-        try:
-            await upload_blob(
-                bucket=settings.gcs_archive_bucket,
-                blob_name=blob_name,
-                payload=gzipped,
-                content_type="application/gzip",
+        for job_id, completed_at, payload in rows:
+            blob_name = _blob_name(job_id)
+            gzipped = gzip.compress(json.dumps(payload).encode("utf-8"))
+            try:
+                await upload_blob(
+                    bucket=settings.gcs_archive_bucket,
+                    blob_name=blob_name,
+                    payload=gzipped,
+                    content_type="application/gzip",
+                )
+            except Exception as exc:
+                _log.warning("archive: upload failed for %s: %s", job_id, exc)
+                continue
+
+            async with factory() as session, session.begin():
+                await session.execute(delete(OnrampOutput).where(OnrampOutput.job_id == job_id))
+
+            candidates.append(
+                ArchiveCandidate(
+                    job_id=job_id,
+                    completed_at=completed_at,
+                    archive_blob_name=blob_name,
+                    source_table="onramp_outputs",
+                )
             )
-        except Exception as exc:
-            _log.warning("archive: upload failed for %s: %s", job_id, exc)
-            continue
-
-        async with factory() as session, session.begin():
-            await session.execute(delete(OnrampOutput).where(OnrampOutput.job_id == job_id))
-
-        candidates.append(
-            ArchiveCandidate(
-                job_id=job_id,
-                completed_at=completed_at,
-                archive_blob_name=blob_name,
-                source_table="onramp_outputs",
-            )
-        )
+    finally:
+        await engine.dispose()
 
     _log.info("archive: archived %d jobs (age_days=%d)", len(candidates), age_days)
     return candidates

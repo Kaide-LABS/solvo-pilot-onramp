@@ -58,14 +58,14 @@ async def cloudrun_readiness(request: Request) -> JSONResponse:
     import redis.asyncio as redis_aio
     from sqlalchemy import text
 
-    from packages.core.db.session import get_async_engine
-
     settings = get_settings()
     db_ok = False
     redis_ok = False
 
     async def _db_ping() -> bool:
-        engine = get_async_engine()
+        # Phase 6.5: use the lifespan-owned engine instead of constructing a
+        # new one every probe — readiness checks shouldn't churn connections.
+        engine = request.app.state.db_engine
         async with engine.connect() as conn:
             await conn.execute(text("SELECT 1"))
         return True

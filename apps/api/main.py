@@ -15,27 +15,36 @@ from apps.api.routes import intake as intake_routes
 from apps.api.routes import jobs as jobs_routes
 from apps.api.routes import slack as slack_routes
 from packages.compliance.boot_validators import run_all_boot_validators
+from packages.core.db.session import make_async_engine
 from packages.core.logging import configure_logging
 from packages.core.settings import get_settings
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """Run all four boot validators on startup.
+    """Run all four boot validators on startup; own the process-wide engine.
 
-    If any validator fails, raise SystemExit with that validator's exit code.
-    Cloud Run interprets the non-zero exit as a health-check failure and the
-    container never enters traffic rotation.
+    Phase 6.5 (§6.1): the FastAPI process owns one AsyncEngine for its
+    lifetime. It is constructed here, attached to `app.state.db_engine` for
+    `get_async_session` to consume, and disposed at shutdown. Celery tasks
+    construct their own engines per-task (see `packages/ingest/tasks.py`).
+
+    If any boot validator fails, raise SystemExit with that validator's exit
+    code. Cloud Run interprets the non-zero exit as a health-check failure and
+    the container never enters traffic rotation.
     """
     settings = get_settings()
     configure_logging(settings)
-    results = await run_all_boot_validators(settings)
-    app.state.boot_results = results
-    failed = [r for r in results if not r.passed]
-    if failed:
-        raise SystemExit(failed[0].exit_code_on_failure)
-    yield
-    # Phase 1 shutdown: nothing. Phase 5 adds Slack client teardown.
+    app.state.db_engine = make_async_engine(settings)
+    try:
+        results = await run_all_boot_validators(settings)
+        app.state.boot_results = results
+        failed = [r for r in results if not r.passed]
+        if failed:
+            raise SystemExit(failed[0].exit_code_on_failure)
+        yield
+    finally:
+        await app.state.db_engine.dispose()
 
 
 _settings = get_settings()

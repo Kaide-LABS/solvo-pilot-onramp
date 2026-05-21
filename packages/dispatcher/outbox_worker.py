@@ -20,7 +20,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from apps.worker.celery_app import celery_app
 from packages.core.db.base import OnrampOutbox
-from packages.core.db.session import get_async_engine
+from packages.core.db.session import make_async_engine
 from packages.core.settings import Settings, get_settings
 from packages.dispatcher.delivery import (
     deliver_access_log,
@@ -72,9 +72,13 @@ def backoff_for(attempts: int) -> int | None:
 
 
 async def _drain_once(settings: Settings) -> dict[str, int]:
-    """Drain at most BATCH_SIZE undelivered outbox rows. Returns a counter dict."""
-    engine = get_async_engine()
-    factory = async_sessionmaker(engine, expire_on_commit=False)
+    """Drain at most BATCH_SIZE undelivered outbox rows. Returns a counter dict.
+
+    Phase 6.5 (§6.1): owns its own AsyncEngine for this beat tick and disposes
+    it in the `finally`. The dispatcher beat fires every 5 s, each tick
+    running under a fresh `asyncio.run` loop, so the engine cannot be cached.
+    """
+    engine = make_async_engine(settings)
     redis_client: redis_aio.Redis = redis_aio.from_url(  # type: ignore[no-untyped-call]
         settings.redis_url, decode_responses=True
     )
@@ -84,6 +88,7 @@ async def _drain_once(settings: Settings) -> dict[str, int]:
     skipped = 0
 
     try:
+        factory = async_sessionmaker(engine, expire_on_commit=False)
         async with factory() as session, session.begin():
             now = datetime.now(UTC)
             stmt = (
@@ -129,6 +134,7 @@ async def _drain_once(settings: Settings) -> dict[str, int]:
                 )
     finally:
         await redis_client.aclose()
+        await engine.dispose()
 
     return {"delivered": delivered, "failed": failed, "skipped": skipped}
 
