@@ -142,3 +142,29 @@ Changes applied since last halt:
 - **Dockerfile.{api,worker}**: added `COPY fixtures/retention_v1.json` (was previously dispatcher-only; needed because the retention enforcer runs on every container's boot validator chain).
 
 Next: Stage F.3 — Magic Moment ×3 against the demo fixtures.
+
+---
+
+## Stage F.3 halted — Celery + async-SQLAlchemy loop incompatibility (2026-05-21)
+
+Stage F.2 PASSED at `dfaf079` with all 4 boot validators green. Attempted Stage F.3 against `fixtures/01_clean_excel.xlsx` (the only Excel fixture in the repo — `K+N_Spot_Rates_Q2_2026_FINAL_v3.xlsx` is a narrative fixture from Master PRD §3.3 and was never built).
+
+Job submitted to `/v1/intake/jobs` and accepted (status=pending), but stayed pending indefinitely. Worker logs revealed:
+
+```
+RuntimeError: Task <Task pending name='Task-2159'
+  coro=<_drain_once() running at /app/packages/dispatcher/outbox_worker.py:95>>
+  got Future <Future pending cb=[BaseProtocol._on_waiter_completed()]>
+  attached to a different loop
+```
+
+Root cause: `packages/core/db/session.py:get_async_engine()` uses `@lru_cache(maxsize=1)`. Works for FastAPI lifespan (single loop), breaks under Celery (each `asyncio.run(...)` task has its own loop, but the cached engine's connection pool is bound to whichever loop opened it first). Every task hitting Postgres after the first one trips the cross-loop error.
+
+Same bug fires from the dispatcher's `_drain_once` (beat-scheduled every 5 s) AND the ingest tasks (`_classify`, `_extract`, `_normalize`, `_validate`). The pipeline is structurally broken under Celery — Stage F.3 cannot pass without a code fix.
+
+Halted and wrote `HUMAN_INTERVENTION_REQUEST.md` with three intersecting gaps:
+1. SQLAlchemy + Celery loop incompatibility (real code bug; ~80 LOC fix across 3 modules).
+2. Missing fixtures (K+N narrative file + 3 broken fixtures referenced by Stage F.3 + F.4 don't exist).
+3. Missing `slack_post` outbox emit code path — Phase 5 spec wrote the dispatcher delivery side but no caller enqueues the row from the ingest pipeline.
+
+Compose stack remains healthy; PRD path-1 patches at `98030d2` are unaffected. Vertex spend this session: ~$0.10 in validator probes; no pipeline run consumed credits.
