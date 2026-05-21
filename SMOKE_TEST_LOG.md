@@ -168,3 +168,53 @@ Halted and wrote `HUMAN_INTERVENTION_REQUEST.md` with three intersecting gaps:
 3. Missing `slack_post` outbox emit code path — Phase 5 spec wrote the dispatcher delivery side but no caller enqueues the row from the ingest pipeline.
 
 Compose stack remains healthy; PRD path-1 patches at `98030d2` are unaffected. Vertex spend this session: ~$0.10 in validator probes; no pipeline run consumed credits.
+
+
+---
+
+## Stage F.3 re-run HALTED (post Phase 6.5 closure, 2026-05-21)
+
+Re-run of Step 4 Stages F.3-F.5 against the Phase-6.5-fixed pipeline at commit `e99cfb4`. Pre-flight (F.1) and boot-validators (F.2) re-verified green. **Stage F.3 halted on Run 1 with four newly-surfaced defects.** Runs 2-3 not attempted.
+
+### Pre-flight & boot validators — PASSED
+
+- All 5 containers healthy after `docker compose up -d --wait`.
+- `/v1/health` returns 200 with all 4 validators passing:
+  - `vertex_ai_handshake` — flash_preview_responsive in `global` (7.6 s)
+  - `postgres_alembic_head` — head=`0004_intake_review` (645 ms)
+  - `un_locode_table_integrity` — 100,050 rows (1.3 s)
+  - `vertex_ai_compliance_handshake` — `rrl_disabled=True zdr_enrolled=False models=3.1-flash-lite,3.1-pro-preview retention=raw7d/norm90d/arch180d/audit365d` (11.8 s)
+- All 4 demo fixtures present and byte-identical to the regenerated set from the Phase 6.5 fix patch (commit `518232d`).
+
+### F.3 Run 1 — FAILED
+
+Submitted `fixtures/K+N_Spot_Rates_Q2_2026_FINAL_v3.xlsx` via `POST /v1/intake/jobs` (prospect_id=demo_k_n_run_1, channel=#pilot-onramp). Job lifecycle:
+
+| Elapsed | Status |
+|---|---|
+| 0 s | `pending` |
+| 4 s | `extracting` (Stage 1 classify_format → Stage 2 excel extract, ~24 s window) |
+| 28 s | `normalizing` (Stage 3 ensemble entered) |
+| 5 min 23 s | EnsembleError raised at T=0.1 inside `_ensemble_for_lane` |
+| 9 min+ | Job row still at `status='normalizing'` — failure-handler rollback (see Defect 6) |
+
+### Defects surfaced (full detail in `HUMAN_INTERVENTION_REQUEST_V2.md`)
+
+- **Defect 4 (compose):** No shared staging volume between `api` and `worker` containers. First job hit `FileNotFoundError` on the worker side. Patched in working tree (added named volume `staging` mounted at `/tmp/onramp` on both services); not committed.
+- **Defect 5 (vertex_client cross-loop):** Same Defect-1 pattern as Phase 6.5's SQLAlchemy bug but in `packages/compliance/vertex_client.py`. The module-level `_client_cache` holds an httpx AsyncClient bound to the boot-validator loop, which forked workers inherit and use post-loop-close. First `_extract` task crashed with `RuntimeError: Event loop is closed`. Patched in working tree (removed cache; per-call genai.Client construction matching Phase 6.5 `make_async_engine` contract); not committed.
+- **Defect 6 (rolled-back failure status):** `_normalize`'s `update_job_status(... "failed", ...)` is inside `session.begin()` which rolls back when the surrounding `raise` re-throws. Jobs that hit `EnsembleError` wedge at `status='normalizing'` permanently. Same pattern likely exists in `_extract`. **Not patched.**
+- **Defect 7 (structural):** F.3.1 acceptance budget is 90 s. The K+N fixture is 50 lanes × N=3 Pro ensemble × ~3-10 s per call ≈ 7-25 minutes minimum. PHASE_6_5_SPEC §6.3 itself benchmarks 30-60 s for a **3-lane** fixture. The 90 s budget is mathematically incompatible with 50 lanes under sequential ensemble. Needs product decision (relax budget / parallelize / shrink fixture / demo-mode flag).
+
+### F.4, F.5 — NOT ATTEMPTED
+
+Stage F.4 (broken fixtures) and Stage F.5 (audit trail) are gated on F.3 passing. Both deferred until the four defects above are resolved.
+
+### Vertex AI cost
+
+Rough estimate **$3-7 USD** for the partial Run 1. Bulk of Pro calls returned 200 OK before the T=0.1 timeout cut the run short.
+
+### Demo recording — NOT AUTHORIZED
+
+The compose stack runs end-to-end through Stage 2 extraction. Stage 3 normalization is both structurally too slow for the F.3 budget and has a stuck-state defect on transient errors. Demo recording remains blocked.
+
+Next: human review of `HUMAN_INTERVENTION_REQUEST_V2.md` and decisions on Defects 6 + 7.
