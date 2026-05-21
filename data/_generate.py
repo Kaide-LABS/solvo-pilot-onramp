@@ -197,6 +197,7 @@ def _save_demo_workbook(wb: Workbook, name: str) -> None:
         DEMO_FIXTURE_TIMESTAMP.second,
     )
     out_path = FIXTURES_DIR / name
+    pinned_iso = DEMO_FIXTURE_TIMESTAMP.strftime("%Y-%m-%dT%H:%M:%SZ")
     with (
         zipfile.ZipFile(buf, "r") as src,
         zipfile.ZipFile(out_path, "w", compression=zipfile.ZIP_DEFLATED) as dst,
@@ -205,6 +206,19 @@ def _save_demo_workbook(wb: Workbook, name: str) -> None:
         # drift cannot perturb the resulting archive.
         for info in sorted(src.infolist(), key=lambda i: i.filename):
             data = src.read(info.filename)
+            # openpyxl re-stamps `dcterms:modified` to UTC-now during save(),
+            # overriding the pinned wb.properties.modified assignment. Rewrite
+            # the timestamp in-place so byte-identical re-runs are achievable.
+            if info.filename == "docProps/core.xml":
+                import re
+
+                text = data.decode("utf-8")
+                text = re.sub(
+                    r"(<dcterms:modified[^>]*>)[^<]+(</dcterms:modified>)",
+                    rf"\g<1>{pinned_iso}\g<2>",
+                    text,
+                )
+                data = text.encode("utf-8")
             new_info = zipfile.ZipInfo(filename=info.filename, date_time=fixed_dt)
             new_info.compress_type = zipfile.ZIP_DEFLATED
             new_info.external_attr = info.external_attr

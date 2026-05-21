@@ -31,6 +31,11 @@ class Settings(BaseSettings):
     postgres_dsn_async: str
     postgres_dsn_sync: str
     expected_alembic_head: str = "0004_intake_review"
+    # docker-compose substitutes these into the postgres service env; declared
+    # here so `.env` ingestion under extra="forbid" doesn't reject them.
+    postgres_user: str = ""
+    postgres_password: str = ""
+    postgres_db: str = ""
 
     # Redis
     redis_url: str
