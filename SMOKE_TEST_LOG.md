@@ -73,3 +73,18 @@ Stages failed: 0 (none ran fully)
 Blocking failures: 1 (env + project provisioning)
 HUMAN_INTERVENTION_REQUEST.md created: YES
 Demo recording authorized: **NO**
+
+---
+
+## Intervention Resolved — Stage B complete via app configuration token (2026-05-21)
+
+Provisioning steps completed via Step 4 Unblock Resume prompt:
+
+- **Stage A — GCP project** (`kaide-ai-84019`): ACTIVE, billing linked to `016E9D-6D6278-EA2838`, `aiplatform.googleapis.com` + `iamcredentials.googleapis.com` + storage APIs enabled, `generativelanguage.googleapis.com` is NOT enabled (no gen-lang trap). ADC quota project re-flipped off the prior gen-lang trap to `kaide-ai-84019`.
+- **Stage B — Slack app** (`A0B5AA0UEUS`, `Solvo Pilot Onramp`): created via `apps.manifest.create` REST endpoint using a workspace app-configuration token (web UI was freezing). Installed to `Demo Sandbox` workspace (`T0AULUC55J6`) via the OAuth v2 flow with a localhost redirect catcher (`http://localhost:8765/oauth-callback`), authorization code exchanged via `oauth.v2.access`. Bot user: `U0B5AFHP2DQ` / `solvo_onramp`. `auth.test` green.
+- **Stage C — GCS buckets**: `kaide-solvo-onramp-dev-staging` (7-day lifecycle on `raw/`) + `kaide-solvo-onramp-dev-archive`, both `europe-west4`. Signer SA `solvo-onramp-signer@kaide-ai-84019.iam.gserviceaccount.com` with `roles/iam.serviceAccountTokenCreator` self-binding and `roles/storage.objectAdmin` on both buckets. Write/read/delete smoke passed.
+- **Stage D — `.env`**: written with build-side Settings names (`VERTEX_LOCATION`, `POSTGRES_DSN_ASYNC/SYNC`, `VERTEX_AI_ZDR_ENROLLED`, `INTERNAL_ADMIN_TOKEN`, `GCS_BUCKET_OUTPUTS`, `GCS_SIGNER_SERVICE_ACCOUNT`, etc.). All required vars present and non-placeholder. `.env` is gitignored.
+
+Artifacts kept in-repo: `slack-app-manifest.yaml` (no secrets — manifest only). All raw tokens, OAuth codes, and the create-response credential cache wiped from `$HOME` after `.env` patch.
+
+Next: re-run Step 4 Stages 1–5 against the provisioned environment.

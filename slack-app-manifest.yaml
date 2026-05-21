@@ -1,0 +1,27 @@
+display_information:
+  name: Solvo Pilot Onramp
+  description: "Pre-engine ratesheet normalization sidecar \xE2\u20AC\u201D Kaide\
+    \ Labs FDE demo"
+  background_color: '#1a1a1a'
+features:
+  bot_user:
+    display_name: Solvo Onramp
+    always_online: true
+oauth_config:
+  scopes:
+    bot:
+    - chat:write
+    - chat:write.public
+    - files:read
+    - files:write
+    - channels:history
+    - groups:history
+    - im:history
+    - im:write
+    - users:read
+  redirect_urls:
+  - http://localhost:8765/oauth-callback
+settings:
+  org_deploy_enabled: false
+  socket_mode_enabled: false
+  token_rotation_enabled: false
