@@ -262,15 +262,19 @@ async def test_normalize_failure_surfaces_as_status_failed(
     # something to read. Path under /tmp/onramp embedded in the failure
     # message proves the PII redaction works end-to-end.
     fake_path = f"/tmp/onramp/{job_id}/operator-private-file.xlsx"  # noqa: S108
+    from datetime import UTC, datetime
+
     minimal_ratesheet = NormalizedRatesheet(
+        job_id=job_id,
+        prospect_id="e2e-defect-6",
         lanes=[],
         flagged_for_review=[],
         deterministically_rejected=[],
         extraction_metadata=ExtractionMetadata(
-            prospect_id="e2e-defect-6",
-            source_filename="defect_6.xlsx",
-            source_format="excel",
             extractor_model="gemini-3.1-flash-lite",
+            extracted_at=datetime(2026, 5, 22, 0, 0, 0, tzinfo=UTC),
+            prompt_version="phase4.v1",
+            cell_count=0,
         ),
     )
     try:
