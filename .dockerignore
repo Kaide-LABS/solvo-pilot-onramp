@@ -19,5 +19,6 @@ docs
 tests
 fixtures
 !fixtures/retention_v1.json
+!fixtures/conformal_calibration_v1.json
 docker-compose.yml
 *.local.yml

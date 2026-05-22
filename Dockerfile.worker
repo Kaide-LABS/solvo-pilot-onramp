@@ -24,4 +24,5 @@ COPY migrations/ migrations/
 COPY scripts/ scripts/
 COPY alembic.ini ./
 COPY fixtures/retention_v1.json fixtures/retention_v1.json
+COPY fixtures/conformal_calibration_v1.json fixtures/conformal_calibration_v1.json
 CMD ["celery", "-A", "apps.worker.celery_app", "worker", "--loglevel=INFO", "--concurrency=4"]

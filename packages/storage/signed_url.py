@@ -36,7 +36,9 @@ async def generate_v4_signed_url(
     def _sync() -> tuple[str, datetime]:
         from google.cloud import storage  # type: ignore[attr-defined]
 
-        client = storage.Client()
+        from packages.core.settings import get_settings
+
+        client = storage.Client(project=get_settings().gcp_project_id)
         blob = client.bucket(bucket).blob(blob_name)
         issued_at = datetime.now(UTC)
         url: str = blob.generate_signed_url(
