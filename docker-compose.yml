@@ -37,6 +37,7 @@ services:
       GOOGLE_APPLICATION_CREDENTIALS: /gcp-adc/application_default_credentials.json
     volumes:
       - ${USERPROFILE:-${HOME}}/AppData/Roaming/gcloud:/gcp-adc:ro
+      - staging:/tmp/onramp
     ports:
       - "8000:8000"
     depends_on:
@@ -63,6 +64,7 @@ services:
       GOOGLE_APPLICATION_CREDENTIALS: /gcp-adc/application_default_credentials.json
     volumes:
       - ${USERPROFILE:-${HOME}}/AppData/Roaming/gcloud:/gcp-adc:ro
+      - staging:/tmp/onramp
     depends_on:
       postgres:
         condition: service_healthy
@@ -97,3 +99,4 @@ services:
 
 volumes:
   pgdata:
+  staging:

@@ -226,11 +226,15 @@ def _save_demo_workbook(wb: Workbook, name: str) -> None:
 
 
 def _generate_kn_spot_rates() -> None:
-    """Generate the 50-lane K+N Magic Moment fixture with 3 deliberate breakages.
+    """Generate the 15-lane K+N Magic Moment fixture with 3 deliberate breakages.
 
-    Lane 23: origin_port = ZZZZZ (impossible UN/LOCODE — Stage 4 rejection).
-    Lane 31: base_rate_usd = -1500.00 (negative — Stage 4 rejection).
-    Lane 47: expiry_date = "Feb 1 2025" (past — Stage 4 flag).
+    Phase 6.6 (§6.4.1) shrinks the fixture from 50 lanes to 15 to fit the
+    recalibrated F.3.1 acceptance budget (180 s). Broken-lane positions
+    moved from (23, 31, 47) to (7, 11, 14).
+
+    Lane 7: origin_port = ZZZZZ (impossible UN/LOCODE — Stage 4 rejection).
+    Lane 11: base_rate_usd = -1500.00 (negative — Stage 4 rejection).
+    Lane 14: expiry_date = "Feb 1 2025" (past — Stage 4 flag).
     """
     rng = random.Random(DEMO_FIXTURE_SEED)  # noqa: S311 — fixture determinism only
     wb = Workbook()
@@ -257,12 +261,12 @@ def _generate_kn_spot_rates() -> None:
     ]
     ws.append(header)
 
+    # Phase 6.6: 3 merged-cell rate-tier header rows interleaved with the
+    # 15-lane body (down from 5 tier rows for the 50-lane Phase 6.5 version).
     merged_at: dict[int, str] = {
         2: "STANDARD RATES",
-        13: "VOLUME CUSTOMER RATES",
-        25: "SPOT RATES Q2 2026",
-        37: "RF / TEMP-CONTROLLED",
-        48: "BUNKER UPLIFTS — POST APR 15",
+        10: "SPOT RATES Q2 2026",
+        16: "RF / TEMP-CONTROLLED",
     }
 
     sample_notes = [
@@ -275,7 +279,7 @@ def _generate_kn_spot_rates() -> None:
 
     lane_idx = 1
     row_idx = 2  # ws.append already wrote header at row 1
-    while lane_idx <= 50:
+    while lane_idx <= 15:
         if row_idx in merged_at:
             # Merge the entire row's columns under a tier label.
             label = merged_at[row_idx]
@@ -285,10 +289,10 @@ def _generate_kn_spot_rates() -> None:
             row_idx += 1
             continue
 
-        # Deliberate breakages.
-        if lane_idx == 23:
+        # Phase 6.6: Deliberate breakages moved to lanes (7, 11, 14).
+        if lane_idx == 7:
             origin = "ZZZZZ"
-        elif lane_idx == 31:
+        elif lane_idx == 11:
             origin = rng.choice(_CLEAN_PORTS)
         else:
             origin = _pick_port(rng)
@@ -296,7 +300,7 @@ def _generate_kn_spot_rates() -> None:
         destination = _pick_port(rng)
         equipment = rng.choice(_EQUIPMENT_TYPES)
 
-        if lane_idx == 31:
+        if lane_idx == 11:
             rate = -1500.00
         else:
             rate = round(rng.uniform(800.0, 9500.0), 2)
@@ -307,7 +311,7 @@ def _generate_kn_spot_rates() -> None:
         else:
             effective = rng.choice(["Apr 1 2026", "1 April 2026", "April 2026"])
 
-        if lane_idx == 47:
+        if lane_idx == 14:
             expiry = "Feb 1 2025"
         else:
             expiry = rng.choice(["2026-06-30", "Q2 2026", "Q3 2026", "30 June 2026", ""])

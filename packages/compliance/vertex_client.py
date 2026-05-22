@@ -14,27 +14,21 @@ from packages.core.settings import Settings
 if TYPE_CHECKING:
     from google.genai import Client
 
-# Module-level singleton. Settings is not hashable so lru_cache(settings) raises
-# TypeError; we cache by gcp_project_id + vertex_location instead.
-_client_cache: dict[tuple[str, str], Client] = {}
-
-
 def get_vertex_client(settings: Settings) -> Client:
-    """Return a singleton Vertex AI client bound to europe-west4.
+    """Construct a fresh Vertex AI client bound to the configured location.
 
-    Caches by (project, location) so the gRPC channel opens at most once per
-    distinct configuration. Settings (Pydantic BaseSettings) is unhashable so
-    we cannot use lru_cache directly.
+    NOT cached. The genai Client wraps an httpx AsyncClient whose connections
+    are bound to the asyncio loop that opens them. Under Celery's prefork +
+    `asyncio.run`-per-task model — same Defect-1 vector as the SQLAlchemy
+    engine fix in PHASE_6_5_SPEC §6.1 — a module-level cache lets a child
+    process inherit a client whose pooled connections reference the parent's
+    (closed) boot-validator loop, surfacing as `Event loop is closed` on the
+    first task call. Per-call construction avoids the cross-loop hazard.
     """
-    key = (settings.gcp_project_id, settings.vertex_location)
-    client = _client_cache.get(key)
-    if client is None:
-        from google import genai
+    from google import genai
 
-        client = genai.Client(
-            vertexai=True,
-            project=settings.gcp_project_id,
-            location=settings.vertex_location,
-        )
-        _client_cache[key] = client
-    return client
+    return genai.Client(
+        vertexai=True,
+        project=settings.gcp_project_id,
+        location=settings.vertex_location,
+    )

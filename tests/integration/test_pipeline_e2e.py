@@ -1,7 +1,7 @@
 """End-to-end Celery-driven pipeline regression test.
 
-Implements PHASE_6_5_SPEC.md §6.4 — the test that would have caught all
-three Stage F.3 defects.
+Implements PHASE_6_5_SPEC.md §6.4 + PHASE_6_6_SPEC.md §6.7 — the tests that
+would have caught the four Stage F.3 defects across the two halts.
 
 Gated behind `SOLVO_RUN_E2E_TESTS=1` because it requires a live compose
 stack (postgres + redis + api + worker + dispatcher) and burns Vertex AI
@@ -10,12 +10,14 @@ quota. Local recipe:
     docker compose up -d --wait
     SOLVO_RUN_E2E_TESTS=1 pytest tests/integration/test_pipeline_e2e.py -q
 
-The test asserts three things in sequence:
+The tests assert:
 
-1. A clean 3-lane Excel fixture transitions a job from `pending` →
-   `completed` within 90 s. Without the Phase 6.5 per-task engine fix,
-   tasks die on cross-loop SQLAlchemy errors and the job stays at
-   `pending` indefinitely — catching Defect 1.
+1. The 15-lane K+N Magic Moment fixture transitions a job from `pending`
+   → `completed` within 200 s and produces output counts within the
+   Phase 6.6 §6.4.3 bands (11 ±2 normalized, 0-3 flagged, 1-3 rejected).
+   Without the Phase 6.5 per-task engine fix, tasks die on cross-loop
+   SQLAlchemy errors and the job stays at `pending` indefinitely —
+   catching Defect 1.
 
 2. The job's outbox table contains exactly one `audit_log` row with
    `stage=validated` AND exactly one `slack_post` row whose payload has
@@ -25,16 +27,13 @@ The test asserts three things in sequence:
 
 3. The dispatcher delivers the queued `slack_post` row to a recording
    stub of `chat_postMessage`. The bot must be invoked with the correct
-   channel and non-empty blocks. (This step is the proof that the
-   end-to-end Slack thread reply works — which the prior Stage F.3 halt
-   could not demonstrate because Defect 1 prevented the job from ever
-   reaching the dispatcher.)
+   channel and non-empty blocks.
 
-Defect 2 (the missing fixtures) is implicitly caught by step 1 failing
-to find the file path — but this test uses the existing
-`fixtures/01_clean_excel.xlsx` rather than the K+N fixture because the
-K+N path is the *demo* fixture and the e2e test wants a minimal
-deterministic input.
+4. (Phase 6.6 §6.7) A `_normalize` task that raises `EnsembleError`
+   leaves the job at `status='failed'` (not wedged at `normalizing`) AND
+   writes an audit_log row with `stage='normalize_failed'`, no
+   `/tmp/onramp/` substrings in the error_message (PII redaction holds).
+   Catches Defect 6.
 """
 
 from __future__ import annotations
@@ -42,6 +41,7 @@ from __future__ import annotations
 import json
 import os
 import time
+import uuid
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -51,8 +51,11 @@ import pytest
 
 _should_run = os.getenv("SOLVO_RUN_E2E_TESTS") == "1"
 _API_BASE = os.getenv("SOLVO_E2E_API_BASE", "http://localhost:8080")
-_FIXTURE = Path("fixtures/01_clean_excel.xlsx")
-_POLL_DEADLINE_SECONDS = 90.0
+# Phase 6.6: happy path now drives the 15-lane K+N fixture (was the 3-lane
+# `01_clean_excel.xlsx`). Spec §6.7 mandates this swap.
+_FIXTURE = Path("fixtures/K+N_Spot_Rates_Q2_2026_FINAL_v3.xlsx")
+# Phase 6.6 §6.4.3: 180 s F.3.1 budget + 20 s test margin = 200 s deadline.
+_POLL_DEADLINE_SECONDS = 200.0
 _POLL_INTERVAL_SECONDS = 2.0
 
 
@@ -135,18 +138,60 @@ async def _read_outbox_rows(job_id: str) -> list[dict[str, Any]]:
         await engine.dispose()
 
 
+async def _read_output_counts(job_id: str) -> dict[str, int]:
+    """Read the (lane_count, flagged_count, rejected_count) for a job."""
+    from sqlalchemy import select
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from packages.core.db.base import OnrampOutput
+    from packages.core.db.session import make_async_engine
+    from packages.core.settings import get_settings
+
+    settings = get_settings()
+    engine = make_async_engine(settings)
+    try:
+        factory = async_sessionmaker(engine, expire_on_commit=False)
+        async with factory() as session:
+            row = (
+                await session.execute(
+                    select(OnrampOutput).where(OnrampOutput.job_id == job_id)
+                )
+            ).scalar_one()
+            return {
+                "lane_count": int(row.lane_count or 0),
+                "flagged_count": int(row.flagged_count or 0),
+                "rejected_count": int(row.rejected_count or 0),
+            }
+    finally:
+        await engine.dispose()
+
+
 @pytest.mark.asyncio
-async def test_clean_excel_reaches_completed_and_emits_slack_post(
+async def test_kn_15_lane_reaches_completed_and_emits_slack_post(
     _compose_stack_ready: None,
 ) -> None:
-    """End-to-end regression: clean fixture lands at `completed` and queues Slack."""
+    """End-to-end regression: 15-lane K+N fixture lands at `completed` with
+    counts inside the Phase 6.6 §6.4.3 bands and queues a Slack post.
+    """
     channel = "C-E2E-TEST"
     job_id = _submit_job(channel)
 
     final_status = _poll_until_completed(job_id)
     assert final_status == "completed", (
         f"job {job_id} stuck at status={final_status} — regression in Defect 1 "
-        "fix (Celery per-task engine) is likely"
+        "(per-task engine) or Defect 5 (per-call Vertex client) likely"
+    )
+
+    # Phase 6.6 §6.4.3: 15-lane bands.
+    counts = await _read_output_counts(job_id)
+    assert 9 <= counts["lane_count"] <= 13, (
+        f"normalized lane_count={counts['lane_count']} outside 9-13 band"
+    )
+    assert 0 <= counts["flagged_count"] <= 3, (
+        f"flagged_count={counts['flagged_count']} outside 0-3 band"
+    )
+    assert 1 <= counts["rejected_count"] <= 3, (
+        f"rejected_count={counts['rejected_count']} outside 1-3 band"
     )
 
     rows = await _read_outbox_rows(job_id)
@@ -175,6 +220,137 @@ async def test_clean_excel_reaches_completed_and_emits_slack_post(
     # Anti-Replication: no raw rate values embedded.
     serialized = json.dumps(blocks)
     assert "base_rate" not in serialized, "rate value leaked into Slack blocks"
+
+
+@pytest.mark.asyncio
+async def test_normalize_failure_surfaces_as_status_failed(
+    _compose_stack_ready: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Phase 6.6 §6.7 Defect 6 regression.
+
+    Strategy (mechanism (a) per spec): seed an in-process `_normalize` call
+    against the live postgres with `packages.ingest.normalizer.normalize_lanes`
+    monkeypatched to raise `EnsembleError`. Assert the job row reaches
+    `status='failed'` AND the outbox carries the `normalize_failed`
+    audit_log row with PII-clean error_message.
+
+    Runs in-process (not through the worker container) so the monkeypatch
+    actually takes effect. The intake route side-effects (job row + staging
+    file + ingress_received audit_log) are produced manually rather than via
+    Celery — we want to test the failure-handler, not the Celery chain.
+    """
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from packages.core.db.base import OnrampJob, OnrampOutput
+    from packages.core.db.session import make_async_engine
+    from packages.core.models.ratesheet import (
+        ExtractionMetadata,
+        NormalizedRatesheet,
+    )
+    from packages.core.settings import get_settings
+    from packages.ingest import normalizer as normalizer_mod
+    from packages.ingest import tasks as tasks_mod
+    from packages.ingest.normalizer import EnsembleError
+
+    job_id = uuid.uuid4().hex
+    settings = get_settings()
+    engine = make_async_engine(settings)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    # Seed a minimal job row + extraction OnrampOutput so _normalize has
+    # something to read. Path under /tmp/onramp embedded in the failure
+    # message proves the PII redaction works end-to-end.
+    fake_path = f"/tmp/onramp/{job_id}/operator-private-file.xlsx"  # noqa: S108
+    minimal_ratesheet = NormalizedRatesheet(
+        lanes=[],
+        flagged_for_review=[],
+        deterministically_rejected=[],
+        extraction_metadata=ExtractionMetadata(
+            prospect_id="e2e-defect-6",
+            source_filename="defect_6.xlsx",
+            source_format="excel",
+            extractor_model="gemini-3.1-flash-lite",
+        ),
+    )
+    try:
+        async with factory() as session, session.begin():
+            await session.execute(
+                pg_insert(OnrampJob)
+                .values(
+                    job_id=job_id,
+                    prospect_id="e2e-defect-6",
+                    prospect_name="Defect6 Probe",
+                    input_hash=job_id,  # uniqueness guaranteed by uuid4
+                    source_format="excel",
+                    status="normalizing",
+                )
+                .on_conflict_do_nothing(index_elements=[OnrampJob.input_hash])
+            )
+            await session.execute(
+                pg_insert(OnrampOutput).values(
+                    job_id=job_id,
+                    normalized_payload=minimal_ratesheet.model_dump(mode="json"),
+                    lane_count=0,
+                    flagged_count=0,
+                    rejected_count=0,
+                )
+            )
+
+        # Monkeypatch normalize_lanes to raise. The exception message embeds
+        # the operator-private staging path; the audit_log redaction must
+        # strip it down to `<staging>`.
+        async def _raising_normalize_lanes(**_kwargs: Any) -> Any:
+            raise EnsembleError(
+                f"simulated Pro-call timeout reading {fake_path}"
+            )
+
+        monkeypatch.setattr(
+            normalizer_mod, "normalize_lanes", _raising_normalize_lanes
+        )
+
+        # _normalize should propagate EnsembleError after writing failure
+        # status in its own fresh transaction.
+        with pytest.raises(EnsembleError):
+            await tasks_mod._normalize(job_id)
+
+        # Verify the durable failure signal.
+        from sqlalchemy import select
+
+        async with factory() as session:
+            job_row = (
+                await session.execute(
+                    select(OnrampJob).where(OnrampJob.job_id == job_id)
+                )
+            ).scalar_one()
+            assert job_row.status == "failed", (
+                f"Defect 6 regression: job stuck at status={job_row.status!r} "
+                "instead of 'failed'"
+            )
+            assert job_row.completed_at is not None
+
+        rows = await _read_outbox_rows(job_id)
+        normalize_failed_rows = [
+            r
+            for r in rows
+            if r["event_type"] == "audit_log"
+            and isinstance(r["payload"], dict)
+            and r["payload"].get("stage") == "normalize_failed"
+        ]
+        assert len(normalize_failed_rows) == 1, (
+            f"expected one audit_log/normalize_failed row, got "
+            f"{len(normalize_failed_rows)}"
+        )
+        payload = normalize_failed_rows[0]["payload"]
+        assert payload["error_type"] == "EnsembleError"
+        assert payload["error_message"], "error_message must be non-empty"
+        # PII redaction: the /tmp/onramp/... path must be scrubbed.
+        assert "/tmp/onramp/" not in payload["error_message"], (  # noqa: S108
+            f"staging path leaked into audit_log: {payload['error_message']!r}"
+        )
+        assert "<staging>" in payload["error_message"]
+    finally:
+        await engine.dispose()
 
 
 @pytest.mark.asyncio

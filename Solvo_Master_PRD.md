@@ -245,32 +245,35 @@ User scopes:
 
 ### 3.3 Magic Moment Scenario (Demo Recording)
 
-The 72-hour sprint produces a Vidyard-hosted demo video, voice-narrated by Hafeedh, total runtime 4-5 minutes. The cold-open captures the Magic Moment in the first 30 seconds:
+The Magic Moment scenario uses a 15-lane K+N-style spot rate book — `K+N_Spot_Rates_Q2_2026_FINAL_v3.xlsx` — that exhibits the same surface-level messiness as a real forwarder's quarterly tariff: mixed port-code formats (clean UN/LOCODE alongside obfuscated city names), three merged-cell rate-tier headers, ~50 columns with surcharge tabs and free-text carrier notes, prose-format effective and expiry dates, and three deliberately embedded validation triggers — an impossible UN/LOCODE entry, a negative rate value, and an expired tariff window. Solvo's Onramp processes the file end-to-end in under three minutes, surfacing eleven normalized lanes, one to two flagged for human review with citation-grounded clarification text, and two deterministically rejected with rule-ID provenance.
+
+The 72-hour sprint produces a Vidyard-hosted demo video, voice-narrated by Hafeedh, total runtime 4-5 minutes. The cold-open captures the Magic Moment in the first three minutes:
 
 ```
-00:00-00:08   Wide shot of a chaotic 50-column Excel ratesheet
+00:00-00:08   Wide shot of the 15-lane K+N spot rate book
               titled "K+N_Spot_Rates_Q2_2026_FINAL_v3.xlsx".
-              Visible: merged cells, obfuscated port codes,
-              embedded surcharge notes in column headers,
-              dimensional weight inconsistencies.
+              Visible: merged-cell rate-tier headers, obfuscated
+              port codes, surcharge columns (BAF/CAF/PSS/GRI/IMO),
+              carrier notes in free-text columns.
               Voice-over: "This is what every new pilot scoping
               call starts with. A forwarder sends you their rate
-              book. Forty-seven lanes. Twelve surcharge types.
-              Three port code conventions."
+              book. Fifteen lanes. Seven surcharge types. Three
+              port code conventions on the same sheet."
 
 00:08-00:14   File drag-and-drop into Slack #pilot-onramp.
               Bot acknowledgment reply appears within 2 seconds.
               Voice-over: "Drop it in. That's it."
 
-00:14-00:30   Time-lapse of bot threaded replies progressing
+00:14-03:00   Time-lapse of bot threaded replies progressing
               through extraction, normalization, validation.
-              At 00:28: final reply with attached JSON +
-              summary table showing "247 lanes ingested, 241
-              normalized, 4 flagged for review, 2 rejected."
-              Voice-over: "Thirty seconds. Engine-ready data,
-              with confidence scores per lane, with the four
-              that need human review pre-isolated, with the two
-              impossible port codes hard-rejected. Nothing
+              At ~02:45: final reply with attached JSON +
+              summary table showing "15 lanes ingested, 11
+              normalized, 1-2 flagged for review, 2 rejected."
+              Voice-over: "Under three minutes. Engine-ready
+              data, with confidence scores per lane, with the
+              lane that needs human review pre-isolated, with
+              the impossible port code and the negative rate
+              hard-rejected by deterministic rule. Nothing
               guessed. Nothing hidden."
 ```
 

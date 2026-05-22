@@ -1,5 +1,6 @@
 """Celery tasks for Stages 1-4. Implements PHASE_2_SPEC.md §6.3 +
-PHASE_3_SPEC.md §6 + PHASE_4_SPEC.md §6.6 + PHASE_6_5_SPEC.md §6.1, §6.3.
+PHASE_3_SPEC.md §6 + PHASE_4_SPEC.md §6.6 + PHASE_6_5_SPEC.md §6.1, §6.3 +
+PHASE_6_6_SPEC.md §6.3.
 
 Task names match Solvo_Master_PRD.md §3.4 verbatim:
 - tasks.ingest.classify_format
@@ -14,12 +15,20 @@ engine retained asyncpg connections bound to a previously-closed loop.
 
 Phase 6.5 (§6.3) adds a `slack_post` outbox row enqueue inside `_validate`'s
 terminal transaction, alongside the existing `audit_log` enqueue.
+
+Phase 6.6 (§6.3) fixes Defect 6: each failure-path writes its failure-status
+update + audit_log row in its OWN fresh `session.begin()` transaction, then
+re-raises. The prior shape (within `_normalize`) wrote the failure status
+inside the success-path `session.begin()` block before raising, which caused
+SQLAlchemy to roll back the failure write along with the (already-failed)
+success-path work — leaving the job row wedged at the intermediate status.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from pathlib import Path
 from typing import Any
 
@@ -41,6 +50,48 @@ from packages.ingest.excel_extractor import (
 from packages.ingest.outbox import enqueue_outbox_event
 
 _log = logging.getLogger(__name__)
+
+# Phase 6.6 (§6.3): redact staging paths from failure messages so audit_log
+# rows stay PII-clean per §3.10.4. Job-id-keyed paths under /tmp/onramp/
+# could leak operator filenames if surfaced verbatim.
+_TMP_PATH_RE = re.compile(r"/tmp/onramp/[^\s'\"]+")  # noqa: S108 — path literal is a redaction pattern, not a tempfile path
+
+
+def _failure_payload(stage: str, exc: BaseException) -> dict[str, Any]:
+    """Construct a PII-clean audit_log payload for a task failure.
+
+    `stage` is one of `extract_failed`, `normalize_failed`, `validate_failed`.
+    The exception message is truncated to 500 chars after redacting any
+    embedded `/tmp/onramp/...` staging paths to the literal `<staging>`.
+    See PHASE_6_6_SPEC.md §6.3.
+    """
+    redacted = _TMP_PATH_RE.sub("<staging>", str(exc))
+    return {
+        "stage": stage,
+        "error_type": type(exc).__name__,
+        "error_message": redacted[:500],
+    }
+
+
+async def _commit_failure(
+    factory: Any, job_id: str, stage: str, exc: BaseException
+) -> None:
+    """Write the terminal `failed` status + audit_log row in a fresh transaction.
+
+    Phase 6.6 (§6.3): the failure-status write MUST commit in its own
+    `session.begin()` block — separate from any success-path transaction —
+    so that the subsequent `raise` cannot trigger a rollback of the
+    failure-status update. The Celery task is still marked failed at the
+    Celery level after the re-raise; this gives the API a durable signal.
+    """
+    async with factory() as session, session.begin():
+        await update_job_status(session, job_id, new_status="failed", completed=True)
+        await enqueue_outbox_event(
+            session,
+            job_id=job_id,
+            event_type="audit_log",
+            payload=_failure_payload(stage, exc),
+        )
 
 
 async def _recover_requested_slack_channel(factory: Any, job_id: str) -> str | None:
@@ -146,8 +197,13 @@ async def _extract(job_id: str, staging_path: str, fmt: str) -> None:
                     Path(staging_path), job_id, prospect_id, settings
                 )
         except (ExcelTooLargeError, ExtractionError) as exc:
-            async with factory() as session, session.begin():
-                await update_job_status(session, job_id, new_status="failed", completed=True)
+            # Phase 6.6 (§6.3): failure-status write + audit_log row in their
+            # own fresh transaction, then propagate. The existing _extract
+            # failure-handler already exited `session.begin()` before raising
+            # (so the failure-status commit was safe), but the audit_log row
+            # is new — Phase 6.6 §8 criterion #3 requires it across all three
+            # failure paths.
+            await _commit_failure(factory, job_id, "extract_failed", exc)
             _log.warning("extract_payload: job=%s failed: %s", job_id, exc)
             raise
 
@@ -197,21 +253,29 @@ async def _normalize(job_id: str) -> None:
         async with factory() as session:
             extraction = await get_output(session, job_id)
         if extraction is None:
-            raise EnsembleError(f"job {job_id!r} has no extraction output to normalize")
+            exc = EnsembleError(f"job {job_id!r} has no extraction output to normalize")
+            await _commit_failure(factory, job_id, "normalize_failed", exc)
+            raise exc
 
-        async with factory() as session, session.begin():
-            try:
+        # Phase 6.6 (§6.3): heavy LLM work happens OUTSIDE the success-path
+        # transaction so that a transient EnsembleError can write its
+        # failure-status row in a separate session.begin() without being
+        # rolled back. The successful normalize result is then committed in
+        # the success-path transaction below.
+        try:
+            async with factory() as session:
                 updated, consensus_results = await normalize_lanes(
                     job_id=job_id,
                     extraction=extraction,
                     session=session,
                     settings=settings,
                 )
-            except EnsembleError as exc:
-                await update_job_status(session, job_id, new_status="failed", completed=True)
-                _log.warning("normalize_lanes: job=%s failed: %s", job_id, exc)
-                raise
+        except EnsembleError as exc:
+            await _commit_failure(factory, job_id, "normalize_failed", exc)
+            _log.warning("normalize_lanes: job=%s failed: %s", job_id, exc)
+            raise
 
+        async with factory() as session, session.begin():
             # Overwrite the persisted normalized_payload via an upsert.
             await session.execute(
                 pg_insert(OnrampOutput)
@@ -310,173 +374,196 @@ async def _validate(job_id: str) -> None:
     try:
         factory = async_sessionmaker(engine, expire_on_commit=False)
 
-        async with factory() as session:
-            normalized = await get_output(session, job_id)
-        if normalized is None:
-            raise ExtractionError(f"job {job_id!r} has no normalized output to validate")
-
-        # Load the job row up front so we can read prospect_name. The
-        # requested_slack_channel is recovered separately from the
-        # ingress_received audit_log outbox row written by the intake route
-        # (Phase 5 captured the channel in that payload rather than on the job
-        # row; see PHASE_6_5_SPEC §6.3 contract note).
-        async with factory() as session:
-            job_row = await get_job(session, job_id)
-        if job_row is None:
-            raise ExtractionError(f"job {job_id!r} vanished before validation")
-        slack_channel = await _recover_requested_slack_channel(factory, job_id)
-        if not slack_channel:
-            raise ExtractionError(
-                f"job {job_id!r} has no requested_slack_channel in audit_log; "
-                "intake route did not enqueue ingress_received payload as expected"
-            )
-
-        validated, violations = apply_hard_rules(normalized)
-
-        calibration = load_calibration(Path("fixtures/conformal_calibration_v1.json"))
-
-        async with factory() as session:
-            votes_payload_by_lane = await load_votes_by_lane(session, job_id)
-
-        # Build EnsembleVote objects per lane for conformal scoring.
-        votes_by_lane: dict[str, list[EnsembleVote]] = {}
-        for lane_id, raw_votes in votes_payload_by_lane.items():
-            votes_by_lane[lane_id] = [EnsembleVote.model_validate(v) for v in raw_votes]
-
-        conformal_by_lane: dict[str, ConformalScore] = {}
-        low_confidence: list[FlaggedLane] = []
-        for lane in validated.lanes:
-            votes = votes_by_lane.get(lane.lane_id, [])
-            if not votes:
-                continue
-            score = compute_conformal_score(lane.lane_id, votes, calibration)
-            conformal_by_lane[lane.lane_id] = score
-            if not accepts(score):
-                low_confidence.append(
-                    FlaggedLane(lane=lane, reason="low_confidence", confidence=score.confidence)
-                )
-
-        # Conditional correction for no-majority flagged lanes.
-        correction_triggers = 0
-        surviving_flags: list[FlaggedLane] = []
-        for flagged in validated.flagged_for_review:
-            if flagged.reason != "no_majority":
-                surviving_flags.append(flagged)
-                continue
+        # Phase 6.6 (§6.3): wrap the _validate body so any failure (missing
+        # rows, slack-channel recovery, conformal/correction/clarification
+        # exceptions) writes a durable failure-status row + audit_log entry
+        # before re-raising. Without this the job wedged at status='validating'.
+        try:
             async with factory() as session:
-                prior_payload = await load_consensus(session, job_id, flagged.lane.lane_id)
-            if prior_payload is None:
-                surviving_flags.append(flagged)
-                continue
-            try:
-                prior = ConsensusResult.model_validate(prior_payload)
-            except Exception:
-                surviving_flags.append(flagged)
-                continue
-            corrected = await conditional_correction(prior, settings)
-            correction_triggers += 1
-            if corrected.consensus_lane is None:
-                surviving_flags.append(flagged)
-
-        # Drop low-confidence flags only after correction so we don't double-count.
-        surviving_flags.extend(low_confidence)
-
-        # Clarification text (numeric-free) per surviving flag.
-        clarifications: dict[str, str] = {}
-        for f in surviving_flags:
-            clarifications[f.lane.lane_id] = await draft_clarification(f, settings)
-
-        validated = validated.model_copy(update={"flagged_for_review": surviving_flags})
-
-        # Phase 6.5: build the Slack Block Kit summary + signed URL outside
-        # the transaction so the I/O (GCS signer) doesn't hold a Postgres
-        # transaction open longer than necessary. Both values land inside the
-        # `slack_post` outbox payload, which commits in the same transaction
-        # as the audit_log row and the OnrampOutput upsert.
-        signed_url, expires_at = await generate_v4_signed_url(
-            bucket=settings.gcs_bucket_outputs,
-            blob_name=f"jobs/{job_id}/normalized_ratesheet.json",
-            service_account=settings.gcs_signer_service_account,
-        )
-        summary_blocks = build_summary_blocks(
-            rs=validated,
-            signed_url=signed_url,
-            expires_at_iso=expires_at.isoformat(),
-        )
-        slack_payload: dict[str, Any] = {
-            "channel": slack_channel,
-            "blocks": summary_blocks,
-            "text": f"Solvo Onramp result for {job_row.prospect_name}",
-        }
-
-        async with factory() as session, session.begin():
-            await session.execute(
-                pg_insert(OnrampOutput)
-                .values(
-                    job_id=job_id,
-                    normalized_payload=validated.model_dump(mode="json"),
-                    lane_count=len(validated.lanes),
-                    flagged_count=len(validated.flagged_for_review),
-                    rejected_count=len(validated.deterministically_rejected),
+                normalized = await get_output(session, job_id)
+            if normalized is None:
+                raise ExtractionError(
+                    f"job {job_id!r} has no normalized output to validate"
                 )
-                .on_conflict_do_update(
-                    index_elements=[OnrampOutput.job_id],
-                    set_={
-                        "normalized_payload": validated.model_dump(mode="json"),
-                        "lane_count": len(validated.lanes),
-                        "flagged_count": len(validated.flagged_for_review),
-                        "rejected_count": len(validated.deterministically_rejected),
-                    },
+
+            # Load the job row up front so we can read prospect_name. The
+            # requested_slack_channel is recovered separately from the
+            # ingress_received audit_log outbox row written by the intake
+            # route (Phase 5 captured the channel in that payload rather
+            # than on the job row; see PHASE_6_5_SPEC §6.3 contract note).
+            async with factory() as session:
+                job_row = await get_job(session, job_id)
+            if job_row is None:
+                raise ExtractionError(f"job {job_id!r} vanished before validation")
+            slack_channel = await _recover_requested_slack_channel(factory, job_id)
+            if not slack_channel:
+                raise ExtractionError(
+                    f"job {job_id!r} has no requested_slack_channel in audit_log; "
+                    "intake route did not enqueue ingress_received payload as expected"
                 )
+
+            validated, violations = apply_hard_rules(normalized)
+
+            calibration = load_calibration(Path("fixtures/conformal_calibration_v1.json"))
+
+            async with factory() as session:
+                votes_payload_by_lane = await load_votes_by_lane(session, job_id)
+
+            # Build EnsembleVote objects per lane for conformal scoring.
+            votes_by_lane: dict[str, list[EnsembleVote]] = {}
+            for lane_id, raw_votes in votes_payload_by_lane.items():
+                votes_by_lane[lane_id] = [EnsembleVote.model_validate(v) for v in raw_votes]
+
+            conformal_by_lane: dict[str, ConformalScore] = {}
+            low_confidence: list[FlaggedLane] = []
+            for lane in validated.lanes:
+                votes = votes_by_lane.get(lane.lane_id, [])
+                if not votes:
+                    continue
+                score = compute_conformal_score(lane.lane_id, votes, calibration)
+                conformal_by_lane[lane.lane_id] = score
+                if not accepts(score):
+                    low_confidence.append(
+                        FlaggedLane(
+                            lane=lane, reason="low_confidence", confidence=score.confidence
+                        )
+                    )
+
+            # Conditional correction for no-majority flagged lanes.
+            correction_triggers = 0
+            surviving_flags: list[FlaggedLane] = []
+            for flagged in validated.flagged_for_review:
+                if flagged.reason != "no_majority":
+                    surviving_flags.append(flagged)
+                    continue
+                async with factory() as session:
+                    prior_payload = await load_consensus(session, job_id, flagged.lane.lane_id)
+                if prior_payload is None:
+                    surviving_flags.append(flagged)
+                    continue
+                try:
+                    prior = ConsensusResult.model_validate(prior_payload)
+                except Exception:
+                    surviving_flags.append(flagged)
+                    continue
+                corrected = await conditional_correction(prior, settings)
+                correction_triggers += 1
+                if corrected.consensus_lane is None:
+                    surviving_flags.append(flagged)
+
+            # Drop low-confidence flags only after correction so we don't double-count.
+            surviving_flags.extend(low_confidence)
+
+            # Clarification text (numeric-free) per surviving flag.
+            clarifications: dict[str, str] = {}
+            for f in surviving_flags:
+                clarifications[f.lane.lane_id] = await draft_clarification(f, settings)
+
+            validated = validated.model_copy(update={"flagged_for_review": surviving_flags})
+
+            # Phase 6.5: build the Slack Block Kit summary + signed URL outside
+            # the transaction so the I/O (GCS signer) doesn't hold a Postgres
+            # transaction open longer than necessary. Both values land inside the
+            # `slack_post` outbox payload, which commits in the same transaction
+            # as the audit_log row and the OnrampOutput upsert.
+            signed_url, expires_at = await generate_v4_signed_url(
+                bucket=settings.gcs_bucket_outputs,
+                blob_name=f"jobs/{job_id}/normalized_ratesheet.json",
+                service_account=settings.gcs_signer_service_account,
             )
-            # Update per-lane conformal scores with calibrated confidence values.
-            for lane_id, score in conformal_by_lane.items():
+            summary_blocks = build_summary_blocks(
+                rs=validated,
+                signed_url=signed_url,
+                expires_at_iso=expires_at.isoformat(),
+            )
+            slack_payload: dict[str, Any] = {
+                "channel": slack_channel,
+                "blocks": summary_blocks,
+                "text": f"Solvo Onramp result for {job_row.prospect_name}",
+            }
+
+            async with factory() as session, session.begin():
                 await session.execute(
-                    pg_insert(OnrampConformalScore)
+                    pg_insert(OnrampOutput)
                     .values(
                         job_id=job_id,
-                        lane_id=lane_id,
-                        confidence=score.confidence,
-                        ensemble_votes={"calibration_id": score.calibration_id},
+                        normalized_payload=validated.model_dump(mode="json"),
+                        lane_count=len(validated.lanes),
+                        flagged_count=len(validated.flagged_for_review),
+                        rejected_count=len(validated.deterministically_rejected),
                     )
                     .on_conflict_do_update(
-                        index_elements=[
-                            OnrampConformalScore.job_id,
-                            OnrampConformalScore.lane_id,
-                        ],
+                        index_elements=[OnrampOutput.job_id],
                         set_={
-                            "confidence": score.confidence,
-                            "ensemble_votes": {"calibration_id": score.calibration_id},
+                            "normalized_payload": validated.model_dump(mode="json"),
+                            "lane_count": len(validated.lanes),
+                            "flagged_count": len(validated.flagged_for_review),
+                            "rejected_count": len(validated.deterministically_rejected),
                         },
                     )
                 )
-            await update_job_status(session, job_id, new_status="completed", completed=True)
-            await enqueue_outbox_event(
-                session,
-                job_id=job_id,
-                event_type="audit_log",
-                payload={
-                    "stage": "validated",
-                    "violations": [v.rule_id for v in violations],
-                    "lane_count": len(validated.lanes),
-                    "rejected_count": len(validated.deterministically_rejected),
-                    "conformal_summary": {
-                        "scored": len(conformal_by_lane),
-                        "low_confidence": len(low_confidence),
+                # Update per-lane conformal scores with calibrated confidence values.
+                for lane_id, score in conformal_by_lane.items():
+                    await session.execute(
+                        pg_insert(OnrampConformalScore)
+                        .values(
+                            job_id=job_id,
+                            lane_id=lane_id,
+                            confidence=score.confidence,
+                            ensemble_votes={"calibration_id": score.calibration_id},
+                        )
+                        .on_conflict_do_update(
+                            index_elements=[
+                                OnrampConformalScore.job_id,
+                                OnrampConformalScore.lane_id,
+                            ],
+                            set_={
+                                "confidence": score.confidence,
+                                "ensemble_votes": {"calibration_id": score.calibration_id},
+                            },
+                        )
+                    )
+                await update_job_status(
+                    session, job_id, new_status="completed", completed=True
+                )
+                await enqueue_outbox_event(
+                    session,
+                    job_id=job_id,
+                    event_type="audit_log",
+                    payload={
+                        "stage": "validated",
+                        "violations": [v.rule_id for v in violations],
+                        "lane_count": len(validated.lanes),
+                        "rejected_count": len(validated.deterministically_rejected),
+                        "conformal_summary": {
+                            "scored": len(conformal_by_lane),
+                            "low_confidence": len(low_confidence),
+                        },
+                        "correction_triggered": correction_triggers,
+                        "clarifications": len(clarifications),
                     },
-                    "correction_triggered": correction_triggers,
-                    "clarifications": len(clarifications),
-                },
-            )
-            # Phase 6.5 (§6.3): enqueue the Slack thread reply alongside the
-            # audit_log row, inside the same transaction. Transactional-outbox
-            # invariant preserved — if validation rolls back, no Slack post leaks.
-            await enqueue_outbox_event(
-                session,
-                job_id=job_id,
-                event_type="slack_post",
-                payload=slack_payload,
-            )
+                )
+                # Phase 6.5 (§6.3): enqueue the Slack thread reply alongside
+                # the audit_log row, inside the same transaction.
+                # Transactional-outbox invariant preserved — if validation
+                # rolls back, no Slack post leaks.
+                await enqueue_outbox_event(
+                    session,
+                    job_id=job_id,
+                    event_type="slack_post",
+                    payload=slack_payload,
+                )
+        except Exception as exc:
+            # Phase 6.6 (§6.3): _validate failure-handler. Catches any
+            # exception from the body above — missing rows, slack-channel
+            # recovery, conformal scoring, conditional correction,
+            # clarification drafting, OR the terminal upsert transaction.
+            # The failure-status row + audit_log entry commit in their own
+            # fresh transaction so the API has a durable `failed` signal.
+            # No slack_post outbox row is enqueued on failure path.
+            await _commit_failure(factory, job_id, "validate_failed", exc)
+            _log.warning("validate_output: job=%s failed: %s", job_id, exc)
+            raise
     finally:
         await engine.dispose()
 

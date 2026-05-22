@@ -242,6 +242,14 @@ Expected: parsing fails inside `packages/ingest/edifact_extractor.py` determinis
 
 `data/_generate.py` must be re-runnable. Running it twice in a clean repo produces byte-identical XLSX + EDI files. openpyxl's default behaviour stamps a workbook creation timestamp into the file — disable this by setting `wb.properties.created = datetime(2026, 5, 1, 0, 0, 0)` and `wb.properties.modified = datetime(2026, 5, 1, 0, 0, 0)` before save. All RNG calls use `random.Random(0xKAIDE5010)` so synthetic port codes / rates / surcharges are reproducible.
 
+#### §6.2.1 — Superseded by PHASE_6_6_SPEC §6.4 (2026-05-22)
+
+The K+N fixture above (50 lanes) was shrunk to 15 lanes in Phase 6.6 (commit
+landing post-`c24710b`) to fit the recalibrated F.3.1 acceptance budget
+(90 s → 180 s). Broken-lane positions moved from (23, 31, 47) to (7, 11, 14).
+See `PHASE_6_6_SPEC.md` §6.4.1 for the new fixture contract and §6.4.3 for
+the revised acceptance criteria.
+
 ### §6.3 — Defect 3 Fix: `slack_post` Outbox Enqueue from `_validate`
 
 **Problem (precise statement).** `packages/dispatcher/delivery.py:deliver_slack_post` exists and calls `WebClient.chat_postMessage`. `packages/slack/block_kit.py:build_summary_blocks` exists and produces the Block Kit JSON. `packages/ingest/outbox.py:OutboxEventType` registers `slack_post`. The dispatcher polls the outbox every 5 s and dispatches by event type.
