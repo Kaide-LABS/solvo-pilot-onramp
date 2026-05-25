@@ -184,6 +184,13 @@ async def get_result_url(
             detail=f"job_not_completed (status={status_obj.status})",
         )
 
+    # Phase 6.7-ops (Defect 12): the read of `status_obj` above implicitly
+    # opens an autobegin transaction on the dependency-injected session.
+    # Close it before opening the write-path begin block; otherwise
+    # SQLAlchemy raises `InvalidRequestError: A transaction is already begun
+    # on this Session.`
+    await session.commit()
+
     blob_name = f"jobs/{job_id}/normalized_ratesheet.json"
     url, expires_at = await generate_v4_signed_url(
         bucket=settings.gcs_bucket_outputs,
@@ -265,6 +272,10 @@ async def post_review(
     ).scalar_one_or_none()
     if job_exists is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="job_not_found")
+
+    # Phase 6.7-ops (Defect 12): close the implicit read-tx before opening
+    # the write begin block (same pattern as get_result_url).
+    await session.commit()
 
     async with session.begin():
         session.add(
