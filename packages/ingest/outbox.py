@@ -20,6 +20,7 @@ OutboxEventType = Literal[
     "audit_log",
     "signed_url_create",
     "access_log",
+    "upload_result",
 ]
 
 

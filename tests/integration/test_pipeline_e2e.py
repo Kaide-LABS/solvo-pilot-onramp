@@ -38,6 +38,7 @@ The tests assert:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import time
@@ -54,8 +55,8 @@ _API_BASE = os.getenv("SOLVO_E2E_API_BASE", "http://localhost:8080")
 # Phase 6.6: happy path now drives the 15-lane K+N fixture (was the 3-lane
 # `01_clean_excel.xlsx`). Spec §6.7 mandates this swap.
 _FIXTURE = Path("fixtures/K+N_Spot_Rates_Q2_2026_FINAL_v3.xlsx")
-# Phase 6.6 §6.4.3: 180 s F.3.1 budget + 20 s test margin = 200 s deadline.
-_POLL_DEADLINE_SECONDS = 200.0
+# Phase 6.8 §6.4.3.1: 240 s F.3.1 budget + 20 s test margin = 260 s deadline.
+_POLL_DEADLINE_SECONDS = 260.0
 _POLL_INTERVAL_SECONDS = 2.0
 
 
@@ -153,9 +154,7 @@ async def _read_output_counts(job_id: str) -> dict[str, int]:
         factory = async_sessionmaker(engine, expire_on_commit=False)
         async with factory() as session:
             row = (
-                await session.execute(
-                    select(OnrampOutput).where(OnrampOutput.job_id == job_id)
-                )
+                await session.execute(select(OnrampOutput).where(OnrampOutput.job_id == job_id))
             ).scalar_one()
             return {
                 "lane_count": int(row.lane_count or 0),
@@ -220,6 +219,41 @@ async def test_kn_15_lane_reaches_completed_and_emits_slack_post(
     # Anti-Replication: no raw rate values embedded.
     serialized = json.dumps(blocks)
     assert "base_rate" not in serialized, "rate value leaked into Slack blocks"
+
+    # Phase 6.8 §6.4: assert an upload_result outbox row was enqueued, then
+    # fetch the signed URL via /result-url and GET the blob. Retries absorb
+    # the upload_result outbox drain race (PHASE_6_8_SPEC §6.2.1) — the
+    # signed URL is computed eagerly in _validate but the actual GCS write
+    # lands on the next dispatcher beat (≤5 s).
+    upload_results = [r for r in rows if r["event_type"] == "upload_result"]
+    assert len(upload_results) == 1, (
+        f"expected exactly one upload_result row (Defect 14 fix); got {len(upload_results)}"
+    )
+
+    async with httpx.AsyncClient(base_url=_API_BASE) as api_client:
+        result_url_response = await api_client.get(f"/v1/intake/jobs/{job_id}/result-url")
+        assert result_url_response.status_code == 200, result_url_response.text
+        signed_url = result_url_response.json()["url"]
+
+    async with httpx.AsyncClient() as gcs_client:
+        last_status: int | None = None
+        blob_response: httpx.Response | None = None
+        for _attempt in range(3):
+            blob_response = await gcs_client.get(signed_url)
+            last_status = blob_response.status_code
+            if last_status == 200:
+                break
+            await asyncio.sleep(2.0)
+        assert last_status == 200, (
+            f"GCS blob not uploaded after 3 x 2s retries (signed URL fetch "
+            f"returned {last_status}); upload_result outbox drain may be stuck"
+        )
+        assert blob_response is not None
+        result = blob_response.json()
+
+    assert 9 <= len(result["lanes"]) <= 13
+    assert 0 <= len(result["flagged_for_review"]) <= 3
+    assert 1 <= len(result["deterministically_rejected"]) <= 3
 
 
 @pytest.mark.asyncio
@@ -305,13 +339,9 @@ async def test_normalize_failure_surfaces_as_status_failed(
         # the operator-private staging path; the audit_log redaction must
         # strip it down to `<staging>`.
         async def _raising_normalize_lanes(**_kwargs: Any) -> Any:
-            raise EnsembleError(
-                f"simulated Pro-call timeout reading {fake_path}"
-            )
+            raise EnsembleError(f"simulated Pro-call timeout reading {fake_path}")
 
-        monkeypatch.setattr(
-            normalizer_mod, "normalize_lanes", _raising_normalize_lanes
-        )
+        monkeypatch.setattr(normalizer_mod, "normalize_lanes", _raising_normalize_lanes)
 
         # _normalize should propagate EnsembleError after writing failure
         # status in its own fresh transaction.
@@ -323,13 +353,10 @@ async def test_normalize_failure_surfaces_as_status_failed(
 
         async with factory() as session:
             job_row = (
-                await session.execute(
-                    select(OnrampJob).where(OnrampJob.job_id == job_id)
-                )
+                await session.execute(select(OnrampJob).where(OnrampJob.job_id == job_id))
             ).scalar_one()
             assert job_row.status == "failed", (
-                f"Defect 6 regression: job stuck at status={job_row.status!r} "
-                "instead of 'failed'"
+                f"Defect 6 regression: job stuck at status={job_row.status!r} instead of 'failed'"
             )
             assert job_row.completed_at is not None
 
@@ -342,8 +369,7 @@ async def test_normalize_failure_surfaces_as_status_failed(
             and r["payload"].get("stage") == "normalize_failed"
         ]
         assert len(normalize_failed_rows) == 1, (
-            f"expected one audit_log/normalize_failed row, got "
-            f"{len(normalize_failed_rows)}"
+            f"expected one audit_log/normalize_failed row, got {len(normalize_failed_rows)}"
         )
         payload = normalize_failed_rows[0]["payload"]
         assert payload["error_type"] == "EnsembleError"

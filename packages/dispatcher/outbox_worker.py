@@ -27,6 +27,7 @@ from packages.dispatcher.delivery import (
     deliver_audit_log,
     deliver_signed_url_create,
     deliver_slack_post,
+    deliver_upload_result,
     deliver_webhook_callback,
 )
 
@@ -56,6 +57,8 @@ async def _dispatch_one(payload: dict[str, Any], event_type: str, settings: Sett
         await deliver_webhook_callback(payload, settings)
     elif event_type == "signed_url_create":
         await deliver_signed_url_create(payload, settings)
+    elif event_type == "upload_result":
+        await deliver_upload_result(payload, settings)
     elif event_type == "audit_log":
         await deliver_audit_log(payload, settings)
     elif event_type == "access_log":

@@ -73,9 +73,7 @@ def _failure_payload(stage: str, exc: BaseException) -> dict[str, Any]:
     }
 
 
-async def _commit_failure(
-    factory: Any, job_id: str, stage: str, exc: BaseException
-) -> None:
+async def _commit_failure(factory: Any, job_id: str, stage: str, exc: BaseException) -> None:
     """Write the terminal `failed` status + audit_log row in a fresh transaction.
 
     Phase 6.6 (§6.3): the failure-status write MUST commit in its own
@@ -382,9 +380,7 @@ async def _validate(job_id: str) -> None:
             async with factory() as session:
                 normalized = await get_output(session, job_id)
             if normalized is None:
-                raise ExtractionError(
-                    f"job {job_id!r} has no normalized output to validate"
-                )
+                raise ExtractionError(f"job {job_id!r} has no normalized output to validate")
 
             # Load the job row up front so we can read prospect_name. The
             # requested_slack_channel is recovered separately from the
@@ -424,9 +420,7 @@ async def _validate(job_id: str) -> None:
                 conformal_by_lane[lane.lane_id] = score
                 if not accepts(score):
                     low_confidence.append(
-                        FlaggedLane(
-                            lane=lane, reason="low_confidence", confidence=score.confidence
-                        )
+                        FlaggedLane(lane=lane, reason="low_confidence", confidence=score.confidence)
                     )
 
             # Conditional correction for no-majority flagged lanes.
@@ -523,9 +517,7 @@ async def _validate(job_id: str) -> None:
                             },
                         )
                     )
-                await update_job_status(
-                    session, job_id, new_status="completed", completed=True
-                )
+                await update_job_status(session, job_id, new_status="completed", completed=True)
                 await enqueue_outbox_event(
                     session,
                     job_id=job_id,
@@ -552,6 +544,23 @@ async def _validate(job_id: str) -> None:
                     job_id=job_id,
                     event_type="slack_post",
                     payload=slack_payload,
+                )
+                # Phase 6.8 (§6.2.2): enqueue the GCS upload of the normalized
+                # payload alongside the slack_post and audit_log rows, inside
+                # the same transaction. The dispatcher's drain loop picks this
+                # up and writes the blob the pre-computed signed URL points at.
+                # job_id is embedded in the payload because _dispatch_one does
+                # not inject row.job_id into the handler call (autonomous-
+                # critique adjustment vs spec §6.2.3, see commit body).
+                await enqueue_outbox_event(
+                    session,
+                    job_id=job_id,
+                    event_type="upload_result",
+                    payload={
+                        "job_id": job_id,
+                        "bucket": settings.gcs_bucket_outputs,
+                        "blob_name": f"jobs/{job_id}/normalized_ratesheet.json",
+                    },
                 )
         except Exception as exc:
             # Phase 6.6 (§6.3): _validate failure-handler. Catches any

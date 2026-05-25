@@ -65,6 +65,59 @@ async def deliver_signed_url_create(payload: dict[str, Any], settings: Settings)
     return {"url": url, "expires_at": expires_at.isoformat()}
 
 
+async def deliver_upload_result(payload: dict[str, Any], settings: Settings) -> dict[str, Any]:
+    """Upload OnrampOutput.normalized_payload as JSON to gs://<bucket>/<blob_name>.
+
+    Phase 6.8 (§6.2.3). Reads the normalized payload from Postgres via a per-task
+    AsyncEngine (Phase 6.5 invariant), serializes it as canonical JSON
+    (sort_keys=True, ensure_ascii=False), and uploads via packages.storage.upload.
+
+    payload contract:
+        - job_id (str)        — embedded by `_validate`'s enqueue
+        - bucket (str)        — settings.gcs_bucket_outputs at enqueue time
+        - blob_name (str)     — "jobs/<job_id>/normalized_ratesheet.json"
+    """
+    import json
+
+    from sqlalchemy import select
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from packages.core.db.base import OnrampOutput
+    from packages.core.db.session import make_async_engine
+    from packages.storage.upload import upload_normalized_json
+
+    job_id = payload["job_id"]
+    bucket = payload["bucket"]
+    blob_name = payload["blob_name"]
+
+    engine = make_async_engine(settings)
+    try:
+        factory = async_sessionmaker(engine, expire_on_commit=False)
+        async with factory() as session:
+            result = await session.execute(
+                select(OnrampOutput.normalized_payload).where(OnrampOutput.job_id == job_id)
+            )
+            normalized = result.scalar_one_or_none()
+        if normalized is None:
+            raise ValueError(f"job {job_id!r} has no normalized_payload to upload")
+
+        payload_bytes = json.dumps(normalized, ensure_ascii=False, sort_keys=True).encode("utf-8")
+
+        await upload_normalized_json(
+            bucket=bucket,
+            blob_name=blob_name,
+            payload=payload_bytes,
+            content_type="application/json",
+        )
+        return {
+            "uploaded": True,
+            "blob_name": blob_name,
+            "size_bytes": len(payload_bytes),
+        }
+    finally:
+        await engine.dispose()
+
+
 async def deliver_audit_log(payload: dict[str, Any], _settings: Settings) -> dict[str, Any]:
     """audit_log delivery is a no-op — the row already lives in onramp_audit_log."""
     _log.debug("audit_log delivered (no-op): %s", payload.get("stage"))
