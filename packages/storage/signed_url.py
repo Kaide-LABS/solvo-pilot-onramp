@@ -34,11 +34,23 @@ async def generate_v4_signed_url(
         )
 
     def _sync() -> tuple[str, datetime]:
+        import google.auth
+        import google.auth.transport.requests
         from google.cloud import storage  # type: ignore[attr-defined]
 
         from packages.core.settings import get_settings
 
-        client = storage.Client(project=get_settings().gcp_project_id)
+        # When ADC has no private key (user OAuth or workload-identity), pass
+        # access_token + service_account_email so generate_signed_url routes
+        # signing through IAMCredentials.signBlob instead of attempting local
+        # private-key signing. Requires roles/iam.serviceAccountTokenCreator
+        # on the signer SA for the calling principal.
+        creds, _ = google.auth.default(
+            scopes=["https://www.googleapis.com/auth/cloud-platform"]
+        )
+        creds.refresh(google.auth.transport.requests.Request())
+
+        client = storage.Client(project=get_settings().gcp_project_id, credentials=creds)
         blob = client.bucket(bucket).blob(blob_name)
         issued_at = datetime.now(UTC)
         url: str = blob.generate_signed_url(
@@ -46,6 +58,7 @@ async def generate_v4_signed_url(
             expiration=timedelta(seconds=ttl_seconds),
             method="GET",
             service_account_email=service_account,
+            access_token=creds.token,
         )
         return url, issued_at + timedelta(seconds=ttl_seconds)
 
