@@ -15,7 +15,7 @@ def test_parse_form_request_constructs_intake_job_request() -> None:
         prospect_id="ACME",
         prospect_name="Acme Forwarding",
         operator_email="ops@kaide.so",
-        requested_slack_channel="#pilot-onramp",
+        requested_slack_channel="#solvo-onramp-demo",
         priority="rush",
     )
     assert isinstance(req, IntakeJobRequest)

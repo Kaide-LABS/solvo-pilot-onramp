@@ -237,7 +237,7 @@ User scopes:
 
 ### 3.2 Three Slack Surfaces
 
-**Surface 1 — `#pilot-onramp` channel (or `#pilot-onramp-{prospect}` per-prospect):** the primary work surface. Users drop ratesheet files directly into the channel with optional one-line context. The bot acknowledges within 2 seconds with a threaded reply showing job_id and estimated completion time. Subsequent threaded replies show progress (extraction complete, normalization complete, validation complete). Final reply includes the normalized JSON as an attached file plus a Block Kit summary table.
+**Surface 1 — `#solvo-onramp-demo` channel (or `#solvo-onramp-demo-{prospect}` per-prospect):** the primary work surface. Users drop ratesheet files directly into the channel with optional one-line context. The bot acknowledges within 2 seconds with a threaded reply showing job_id and estimated completion time. Subsequent threaded replies show progress (extraction complete, normalization complete, validation complete). Final reply includes the normalized JSON as an attached file plus a Block Kit summary table.
 
 **Surface 2 — `/onramp` slash command:** for users who want to ingest URL-referenced files or paste raw EDIFACT text. Format: `/onramp ingest https://example.com/ratesheet.xlsx --prospect "Kuehne+Nagel"`. The slash command opens an ephemeral confirmation modal showing the inferred parameters before triggering the job, giving the user a chance to correct the prospect attribution.
 
@@ -260,7 +260,7 @@ The 72-hour sprint produces a Vidyard-hosted demo video, voice-narrated by Hafee
               book. Fifteen lanes. Seven surcharge types. Three
               port code conventions on the same sheet."
 
-00:08-00:14   File drag-and-drop into Slack #pilot-onramp.
+00:08-00:14   File drag-and-drop into Slack #solvo-onramp-demo.
               Bot acknowledgment reply appears within 2 seconds.
               Voice-over: "Drop it in. That's it."
 
@@ -333,7 +333,7 @@ The sprint produces a containerized demo deployable to Cloud Run, with one fully
 - Implement `tasks.ingest.post_to_slack` with Block Kit message formatting.
 - Implement `/onramp` slash command with confirmation modal.
 - Implement `@Onramp status` and `@Onramp flagged` mention handlers.
-- Implement the file-drop event handler that triggers a job automatically when a supported file is uploaded to `#pilot-onramp`.
+- Implement the file-drop event handler that triggers a job automatically when a supported file is uploaded to `#solvo-onramp-demo`.
 - Build a test Slack workspace with the bot installed for demo recording.
 
 **Hours 48–60 (Day 3 afternoon + evening):** Demo recording and polish.

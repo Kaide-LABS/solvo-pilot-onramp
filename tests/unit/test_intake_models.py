@@ -22,7 +22,7 @@ def test_intake_job_request_forbids_extra_fields() -> None:
                 "prospect_id": "ACME",
                 "prospect_name": "Acme",
                 "operator_email": "ops@kaide.so",
-                "requested_slack_channel": "#pilot-onramp",
+                "requested_slack_channel": "#solvo-onramp-demo",
                 "priority": "normal",
                 "unexpected": True,
             }
@@ -36,7 +36,7 @@ def test_intake_job_request_rejects_unknown_priority() -> None:
                 "prospect_id": "ACME",
                 "prospect_name": "Acme",
                 "operator_email": "ops@kaide.so",
-                "requested_slack_channel": "#pilot-onramp",
+                "requested_slack_channel": "#solvo-onramp-demo",
                 "priority": "URGENT",
             }
         )
