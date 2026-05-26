@@ -419,3 +419,139 @@ async def test_dispatcher_delivers_slack_post(
     assert call["channel"].startswith("C-"), f"unexpected channel: {call['channel']}"
     assert isinstance(call.get("blocks"), list)
     assert len(call["blocks"]) > 0
+
+
+# ---------------------------------------------------------------------------
+# Phase 6.9 §6.4 — F.4 broken-fixture integration tests.
+# These tests do not run during 3A/3B (require live compose stack + Vertex
+# quota). They run during V8 F.4 resume.
+# ---------------------------------------------------------------------------
+
+
+def _submit_broken_fixture(fixture_name: str, channel: str) -> str:
+    """POST a broken fixture and return the job_id (Phase 6.9 §6.4 helper)."""
+    path = Path("fixtures") / fixture_name
+    assert path.exists(), f"missing fixture: {path}"
+    with path.open("rb") as fh:
+        response = httpx.post(
+            f"{_API_BASE}/v1/intake/jobs",
+            files={"upload": (path.name, fh, "application/octet-stream")},
+            data={
+                "prospect_id": f"e2e-f4-{fixture_name}",
+                "prospect_name": "E2E F.4 Probe",
+                "operator_email": "e2e@kaide.so",
+                "requested_slack_channel": channel,
+                "priority": "normal",
+            },
+            timeout=30.0,
+        )
+    assert response.status_code == 202, response.text
+    return str(response.json()["job_id"])
+
+
+async def _fetch_signed_blob(job_id: str) -> dict[str, Any]:
+    """Fetch the result-url for `job_id` and GET the blob with 3 x 2s retry.
+
+    Phase 6.8 §6.2.1 race-absorption: the upload_result outbox row drains
+    on the next dispatcher beat (<=5 s after _validate commit), so the
+    first GET against the signed URL may 404 if it precedes the drain.
+    """
+    async with httpx.AsyncClient(base_url=_API_BASE) as api_client:
+        result_url_response = await api_client.get(f"/v1/intake/jobs/{job_id}/result-url")
+        assert result_url_response.status_code == 200, result_url_response.text
+        signed_url = result_url_response.json()["url"]
+
+    async with httpx.AsyncClient() as gcs_client:
+        last_status: int | None = None
+        blob_response: httpx.Response | None = None
+        for _attempt in range(3):
+            blob_response = await gcs_client.get(signed_url)
+            last_status = blob_response.status_code
+            if last_status == 200:
+                break
+            await asyncio.sleep(2.0)
+        assert last_status == 200, (
+            f"GCS blob not uploaded after 3 x 2s retries (signed URL fetch "
+            f"returned {last_status}); upload_result outbox drain may be stuck"
+        )
+        assert blob_response is not None
+        data: dict[str, Any] = blob_response.json()
+        return data
+
+
+def _assert_rejection_provenance(rejected: list[dict[str, Any]]) -> None:
+    """Phase 6.9 §6.4 helper: every rejection carries lane_id + rule_description."""
+    for r in rejected:
+        assert r.get("lane_id"), f"Defect 17a regression: lane_id missing on rejection: {r!r}"
+        assert r.get("rule_description"), (
+            f"Defect 17b regression: rule_description missing on rejection: {r!r}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_broken_impossible_port_codes_rejects_with_port_unknown_unlocode(
+    _compose_stack_ready: None,
+) -> None:
+    """Phase 6.9 §6.4: F.4 fixture with bad-shape UN/LOCODEs must reject via R1.
+
+    Post-fixture-refresh (Phase 6.9 §6.1.2), validity windows are future-dated
+    so R3 cannot mask R1. The first rejection's rule_id must be
+    port_unknown_unlocode.
+    """
+    job_id = _submit_broken_fixture("broken_impossible_port_codes.xlsx", "#solvo-onramp-demo")
+    final_status = _poll_until_completed(job_id)
+    assert final_status == "completed", (
+        f"broken_impossible_port_codes did not complete: {final_status}"
+    )
+    result = await _fetch_signed_blob(job_id)
+    rejected = result["deterministically_rejected"]
+    assert len(rejected) >= 1, "expected at least one rejection"
+    assert rejected[0]["rule_id"] == "port_unknown_unlocode", (
+        f"Defect 16 regression: expected R1 to fire first; got {rejected[0]['rule_id']}"
+    )
+    _assert_rejection_provenance(rejected)
+
+
+@pytest.mark.asyncio
+async def test_broken_negative_rates_rejects_with_negative_base_rate(
+    _compose_stack_ready: None,
+) -> None:
+    """Phase 6.9 §6.4: F.4 fixture with negative base_rate_usd must reject via R2.
+
+    Post-fixture-refresh, validity windows are future-dated so R2 fires on
+    the negative-rate lanes. At least one rejection must cite negative_base_rate.
+    """
+    job_id = _submit_broken_fixture("broken_negative_rates.xlsx", "#solvo-onramp-demo")
+    final_status = _poll_until_completed(job_id)
+    assert final_status == "completed", f"broken_negative_rates did not complete: {final_status}"
+    result = await _fetch_signed_blob(job_id)
+    rejected = result["deterministically_rejected"]
+    assert any(r["rule_id"] == "negative_base_rate" for r in rejected), (
+        f"Defect 16 regression: expected negative_base_rate to fire; got "
+        f"rule_ids={[r['rule_id'] for r in rejected]}"
+    )
+    _assert_rejection_provenance(rejected)
+
+
+@pytest.mark.asyncio
+async def test_broken_malformed_edifact_rejects_with_structural_citation(
+    _compose_stack_ready: None,
+) -> None:
+    """Phase 6.9 §6.4: malformed EDIFACT rejects at extraction or with structural rule.
+
+    Acceptable outcomes:
+      - final_status == "failed" (extraction parser rejected the malformed envelope)
+      - final_status == "completed" with rejections, NONE of which are
+        validity_window_in_the_past (Defect 16 fix verified)
+    """
+    job_id = _submit_broken_fixture("broken_malformed_edifact.edi", "#solvo-onramp-demo")
+    final_status = _poll_until_completed(job_id)
+    assert final_status in {"completed", "failed"}, f"unexpected terminal status: {final_status}"
+    if final_status == "completed":
+        result = await _fetch_signed_blob(job_id)
+        rejected = result["deterministically_rejected"]
+        assert all(r["rule_id"] != "validity_window_in_the_past" for r in rejected), (
+            "Defect 16 regression: validity_window_in_the_past still masking "
+            "EDIFACT structural defect after fixture refresh"
+        )
+        _assert_rejection_provenance(rejected)

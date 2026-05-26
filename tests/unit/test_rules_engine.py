@@ -1,4 +1,4 @@
-"""Stage 4 rules engine — PHASE_4_SPEC §8 criterion 2."""
+"""Stage 4 rules engine — PHASE_4_SPEC §8 criterion 2 + PHASE_6_9_SPEC §6.3."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ from packages.core.models.ratesheet import (
     NormalizedRatesheet,
     PortCode,
     SourceRow,
+    SurchargeRecord,
 )
 from packages.ingest.rules_engine import apply_hard_rules
 
@@ -60,11 +61,45 @@ def test_golden_path_lane_passes_all_rules() -> None:
     assert rs.deterministically_rejected == []
 
 
+def test_r1_origin_port_shape_violation_rejected() -> None:
+    """R1: defense-in-depth — PortCode normally enforces the regex.
+
+    Bypass-construct a PortCode with a shape-violating code to exercise the
+    rules-engine branch (Phase 6.9 §6.3).
+    """
+    bad_origin = PortCode.model_construct(code="zz")
+    bad_lane = _lane()
+    object.__setattr__(bad_lane, "origin_port", bad_origin)
+    rs, violations = apply_hard_rules(_wrap(bad_lane), now=_TODAY)
+    assert [v.rule_id for v in violations] == ["port_unknown_unlocode"]
+    rej = rs.deterministically_rejected[0]
+    assert rej.lane_id == "L1"
+    assert rej.rule_id == "port_unknown_unlocode"
+    assert "zz" in rej.rule_description
+    assert "UN/LOCODE" in rej.rule_description
+
+
+def test_r1_destination_port_shape_violation_rejected() -> None:
+    """R1 also covers destination port via the second branch (Phase 6.9 §6.2)."""
+    bad_dest = PortCode.model_construct(code="X1")
+    bad_lane = _lane()
+    object.__setattr__(bad_lane, "destination_port", bad_dest)
+    rs, violations = apply_hard_rules(_wrap(bad_lane), now=_TODAY)
+    assert [v.rule_id for v in violations] == ["port_unknown_unlocode"]
+    rej = rs.deterministically_rejected[0]
+    assert rej.lane_id == "L1"
+    assert "destination port" in rej.rule_description
+    assert "X1" in rej.rule_description
+
+
 def test_r2_negative_rate_rejected() -> None:
     rs, violations = apply_hard_rules(_wrap(_lane(base_rate_usd=Decimal("-1"))), now=_TODAY)
     assert [v.rule_id for v in violations] == ["negative_base_rate"]
     assert rs.lanes == []
     assert len(rs.deterministically_rejected) == 1
+    rej = rs.deterministically_rejected[0]
+    assert rej.lane_id == "L1"
+    assert "-1" in rej.rule_description
 
 
 def test_r3_validity_window_in_the_past_rejected() -> None:
@@ -74,6 +109,9 @@ def test_r3_validity_window_in_the_past_rejected() -> None:
     )
     assert [v.rule_id for v in violations] == ["validity_window_in_the_past"]
     assert rs.lanes == []
+    rej = rs.deterministically_rejected[0]
+    assert rej.lane_id == "L1"
+    assert "2024-06-30" in rej.rule_description
 
 
 def test_r4_inverted_validity_window_rejected() -> None:
@@ -83,6 +121,10 @@ def test_r4_inverted_validity_window_rejected() -> None:
     )
     assert [v.rule_id for v in violations] == ["validity_window_inverted"]
     assert rs.lanes == []
+    rej = rs.deterministically_rejected[0]
+    assert rej.lane_id == "L1"
+    assert "2026-12-01" in rej.rule_description
+    assert "2026-06-30" in rej.rule_description
 
 
 def test_r5_transit_time_out_of_range_rejected() -> None:
@@ -94,6 +136,38 @@ def test_r5_transit_time_out_of_range_rejected() -> None:
     rs, violations = apply_hard_rules(_wrap(bad), now=_TODAY)
     assert [v.rule_id for v in violations] == ["transit_time_out_of_range"]
     assert rs.lanes == []
+    rej = rs.deterministically_rejected[0]
+    assert rej.lane_id == "L1"
+    assert "121" in rej.rule_description
+
+
+def test_r6_equipment_type_unknown_rejected() -> None:
+    """R6: defense-in-depth — EquipmentType Literal normally blocks bad values.
+
+    Bypass-set via object.__setattr__ to exercise the rules-engine branch.
+    """
+    bad = _lane()
+    object.__setattr__(bad, "equipment_type", "BOGUS_RIG")
+    rs, violations = apply_hard_rules(_wrap(bad), now=_TODAY)
+    assert [v.rule_id for v in violations] == ["equipment_type_unknown"]
+    rej = rs.deterministically_rejected[0]
+    assert rej.lane_id == "L1"
+    assert "BOGUS_RIG" in rej.rule_description
+
+
+def test_r7_surcharge_basis_unknown_rejected() -> None:
+    """R7: defense-in-depth — SurchargeBasis Literal normally blocks bad values."""
+    bad_surcharge = SurchargeRecord.model_construct(
+        code="BAF", amount_usd=Decimal("50.00"), applies_per="WEEK"
+    )
+    bad = _lane()
+    object.__setattr__(bad, "surcharges", [bad_surcharge])
+    rs, violations = apply_hard_rules(_wrap(bad), now=_TODAY)
+    assert [v.rule_id for v in violations] == ["surcharge_basis_unknown"]
+    rej = rs.deterministically_rejected[0]
+    assert rej.lane_id == "L1"
+    assert "BAF" in rej.rule_description
+    assert "WEEK" in rej.rule_description
 
 
 def test_first_violation_wins() -> None:
@@ -106,3 +180,13 @@ def test_first_violation_wins() -> None:
     object.__setattr__(bad, "transit_time_days", 200)
     _rs, violations = apply_hard_rules(_wrap(bad), now=_TODAY)
     assert [v.rule_id for v in violations] == ["negative_base_rate"]
+
+
+def test_rejection_record_includes_lane_id_provenance() -> None:
+    """Phase 6.9 §3 + §8 #2: every RejectionRecord carries lane_id."""
+    bad = _lane(lane_id="LANE_ABC_42", base_rate_usd=Decimal("-1"))
+    rs, _ = apply_hard_rules(_wrap(bad), now=_TODAY)
+    assert len(rs.deterministically_rejected) == 1
+    rej = rs.deterministically_rejected[0]
+    assert rej.lane_id == "LANE_ABC_42"
+    assert rej.source_row_reference.sheet_name == "Rates"

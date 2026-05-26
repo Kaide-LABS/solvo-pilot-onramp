@@ -61,6 +61,7 @@ def _valid_examples() -> dict[type[BaseModel], dict[str, object]]:
         FlaggedLane: {"lane": lane, "reason": "low_confidence", "confidence": "0.5"},
         RejectionRecord: {
             "source_row_reference": src_row,
+            "lane_id": "L1",
             "rule_id": "RULE_X",
             "rule_description": "invalid equipment",
         },

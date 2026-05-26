@@ -48,45 +48,78 @@ _RULE_DESCRIPTIONS: Final[dict[RuleId, str]] = {
 
 
 def _evaluate_lane(lane: LaneRecord, today: datetime) -> RuleViolation | None:
-    """Apply R1..R7 to a single lane; return the first violation or None."""
-    if not (
-        _UNLOCODE_SHAPE.match(lane.origin_port.code)
-        and _UNLOCODE_SHAPE.match(lane.destination_port.code)
-    ):
+    """Apply R1..R7 to a single lane; return the first violation or None.
+
+    Phase 6.9 (§6.2): each branch composes a value-citing `rule_description`
+    from the lane's actual fields (bad port code, negative rate, past date,
+    etc.) so the rejection record carries real provenance, not just a static
+    label. The `_RULE_DESCRIPTIONS` dict above remains as the rule-category
+    catalogue (used for audit-log grouping) but is no longer the emitted text.
+    """
+    if not _UNLOCODE_SHAPE.match(lane.origin_port.code):
         return RuleViolation(
             rule_id="port_unknown_unlocode",
-            rule_description=_RULE_DESCRIPTIONS["port_unknown_unlocode"],
+            rule_description=(
+                f"origin port code {lane.origin_port.code!r} does not match the "
+                f"UN/LOCODE shape ^[A-Z]{{2}}[A-Z0-9]{{3}}$"
+            ),
+        )
+    if not _UNLOCODE_SHAPE.match(lane.destination_port.code):
+        return RuleViolation(
+            rule_id="port_unknown_unlocode",
+            rule_description=(
+                f"destination port code {lane.destination_port.code!r} does not "
+                f"match the UN/LOCODE shape ^[A-Z]{{2}}[A-Z0-9]{{3}}$"
+            ),
         )
     if lane.base_rate_usd <= Decimal("0"):
         return RuleViolation(
             rule_id="negative_base_rate",
-            rule_description=_RULE_DESCRIPTIONS["negative_base_rate"],
+            rule_description=(
+                f"base_rate_usd={lane.base_rate_usd} is zero or negative; "
+                f"R2 requires a strictly positive USD amount"
+            ),
         )
     if lane.validity_end < today.date():
         return RuleViolation(
             rule_id="validity_window_in_the_past",
-            rule_description=_RULE_DESCRIPTIONS["validity_window_in_the_past"],
+            rule_description=(
+                f"validity_end={lane.validity_end.isoformat()} is before "
+                f"today ({today.date().isoformat()} UTC); rate is stale"
+            ),
         )
     if lane.validity_start > lane.validity_end:
         return RuleViolation(
             rule_id="validity_window_inverted",
-            rule_description=_RULE_DESCRIPTIONS["validity_window_inverted"],
+            rule_description=(
+                f"validity_start={lane.validity_start.isoformat()} is after "
+                f"validity_end={lane.validity_end.isoformat()}"
+            ),
         )
     if lane.transit_time_days is not None and not 1 <= lane.transit_time_days <= 120:
         return RuleViolation(
             rule_id="transit_time_out_of_range",
-            rule_description=_RULE_DESCRIPTIONS["transit_time_out_of_range"],
+            rule_description=(
+                f"transit_time_days={lane.transit_time_days} falls outside the [1, 120] envelope"
+            ),
         )
     if lane.equipment_type not in _EQUIPMENT_TYPES:
         return RuleViolation(
             rule_id="equipment_type_unknown",
-            rule_description=_RULE_DESCRIPTIONS["equipment_type_unknown"],
+            rule_description=(
+                f"equipment_type={lane.equipment_type!r} is not in the locked "
+                f"Literal set {sorted(_EQUIPMENT_TYPES)}"
+            ),
         )
     for surcharge in lane.surcharges:
         if surcharge.applies_per not in _SURCHARGE_BASES:
             return RuleViolation(
                 rule_id="surcharge_basis_unknown",
-                rule_description=_RULE_DESCRIPTIONS["surcharge_basis_unknown"],
+                rule_description=(
+                    f"surcharge {surcharge.code!r}.applies_per="
+                    f"{surcharge.applies_per!r} not in locked Literal set "
+                    f"{sorted(_SURCHARGE_BASES)}"
+                ),
             )
     return None
 
@@ -115,6 +148,7 @@ def apply_hard_rules(
         rejected.append(
             RejectionRecord(
                 source_row_reference=lane.source_row_reference,
+                lane_id=lane.lane_id,
                 rule_id=violation.rule_id,
                 rule_description=violation.rule_description,
             )

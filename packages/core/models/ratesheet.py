@@ -120,6 +120,7 @@ class RejectionRecord(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     source_row_reference: SourceRow
+    lane_id: str = Field(min_length=1, max_length=64)
     rule_id: str = Field(min_length=1, max_length=64)
     rule_description: str = Field(min_length=1, max_length=256)
 
