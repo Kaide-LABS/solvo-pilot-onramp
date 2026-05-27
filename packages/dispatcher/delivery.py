@@ -119,7 +119,10 @@ async def deliver_upload_result(payload: dict[str, Any], settings: Settings) -> 
 
 
 async def deliver_audit_log(payload: dict[str, Any], _settings: Settings) -> dict[str, Any]:
-    """audit_log delivery is a no-op — the row already lives in onramp_audit_log."""
+    """audit_log delivery is a no-op — the row was inserted inline in the
+    originating transaction (Phase 7 §6.3, Defect 18c). The outbox event
+    survives as a redundant signal for the dispatcher but performs no write.
+    """
     _log.debug("audit_log delivered (no-op): %s", payload.get("stage"))
     return {"delivered": True}
 

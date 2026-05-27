@@ -53,6 +53,65 @@ def _segment_to_dict(segment: Any) -> dict[str, Any]:
     return {"tag": segment.tag, "elements": list(segment.elements)}
 
 
+# Phase 7 §6.2 (Defect 18b): UN/EDIFACT DTM qualifier map.
+# 36  = end-of-validity (per UN/EDIFACT D.96A)
+# 137 = document/message date/time (used here as start-of-validity)
+# 35  = delivery date/time, actual
+# 9   = processing date/time
+_DTM_QUALIFIER_END = "36"
+_DTM_QUALIFIER_START = "137"
+
+
+def _parse_dtm_segment(elements: list[Any]) -> tuple[str | None, date | None]:
+    """Return (qualifier, parsed_date) for a DTM segment, or (None, None).
+
+    DTM segments look like `DTM+<qualifier>:<value>:<format>` where format=102
+    is CCYYMMDD per UN/EDIFACT D.96A.
+    """
+    if not elements:
+        return None, None
+    first = elements[0]
+    if isinstance(first, (list, tuple)):
+        parts = [str(p).strip() for p in first]
+    else:
+        parts = [p.strip() for p in str(first).split(":")]
+    if len(parts) < 2:
+        return None, None
+    qualifier = parts[0]
+    value = parts[1]
+    fmt = parts[2] if len(parts) >= 3 else "102"
+    if fmt != "102" or len(value) != 8:
+        return qualifier, None
+    try:
+        parsed = datetime.strptime(value, "%Y%m%d").date()
+    except ValueError:
+        return qualifier, None
+    return qualifier, parsed
+
+
+def _extract_interchange_validity(segments: list[Any]) -> tuple[date | None, date | None]:
+    """Scan all segments for DTM qualifier-36 (end) and 137 (start) dates.
+
+    Phase 7 §6.2 (Defect 18b) fix: the cluster loop discards pre-LIN segments,
+    so DTM+36 / DTM+137 that appear before the first LIN are lost. Scan the
+    full interchange up-front and return the latest end-of-validity and start
+    of validity found. Returns (start, end).
+    """
+    start_date: date | None = None
+    end_date: date | None = None
+    for seg in segments:
+        if seg.tag != "DTM":
+            continue
+        qualifier, parsed = _parse_dtm_segment(list(seg.elements))
+        if parsed is None:
+            continue
+        if qualifier == _DTM_QUALIFIER_END:
+            end_date = parsed
+        elif qualifier == _DTM_QUALIFIER_START:
+            start_date = parsed
+    return start_date, end_date
+
+
 def _parse_lid_segment(elements: list[Any], sheet_label: str, row_index: int) -> LaneRecord | None:
     """Attempt to read a single LIN-rooted lane out of a pre-tokenized cluster.
 
@@ -154,6 +213,12 @@ async def extract_edifact_payload(
     interchange = Interchange.from_str(raw)
     segments = list(interchange.segments)
 
+    # Phase 7 §6.2 (Defect 18b): pre-LIN DTM segments (qualifier 36 / 137)
+    # were discarded by the cluster loop. Capture them up-front so we can
+    # override any Flash-hallucinated validity dates and supply defaults to
+    # the deterministic LIN parser when the LIN itself lacks date elements.
+    interchange_start, interchange_end = _extract_interchange_validity(segments)
+
     # Group adjacent segments into lane clusters: a cluster spans from one LIN
     # to the next LIN or to UNT (message trailer).
     clusters: list[list[Any]] = []
@@ -180,6 +245,11 @@ async def extract_edifact_payload(
 
     for idx, cluster in enumerate(clusters):
         head = cluster[0]
+        # Per-cluster DTM scan (DTMs may also live inside a cluster).
+        cluster_start, cluster_end = _extract_interchange_validity(cluster)
+        effective_start = cluster_start or interchange_start
+        effective_end = cluster_end or interchange_end
+
         lane = _parse_lid_segment(list(head.elements), sheet_label, idx + 1)
         if lane is not None:
             lanes.append(lane)
@@ -193,6 +263,17 @@ async def extract_edifact_payload(
         )
         flash_calls += 1
         if disambiguated is not None:
+            # Phase 7 §6.2 (Defect 18b): authoritative DTM dates override any
+            # Flash-hallucinated validity_start/end. Flash routinely invents
+            # past dates ("2023-12-31") despite the fixture's future-dated
+            # DTM+36 segment.
+            update_payload: dict[str, Any] = {}
+            if effective_start is not None:
+                update_payload["validity_start"] = effective_start
+            if effective_end is not None:
+                update_payload["validity_end"] = effective_end
+            if update_payload:
+                disambiguated = disambiguated.model_copy(update=update_payload)
             lanes.append(disambiguated)
 
     if not lanes:

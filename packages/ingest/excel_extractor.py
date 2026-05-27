@@ -194,9 +194,13 @@ async def extract_excel_payload(
     body["prospect_id"] = prospect_id
     body["extraction_metadata"] = metadata.model_dump(mode="json")
     body["schema_version"] = "onramp.v1"
-    body.setdefault("conformal_scores", {})
-    body.setdefault("flagged_for_review", [])
-    body.setdefault("deterministically_rejected", [])
+    # Phase 7 §6.1.1 (Defect 18a): force-overwrite, not setdefault. The Stage 2
+    # LLM occasionally smuggles non-empty values into these fields with
+    # invented rule_ids like "INVALID_PORT_CODE". Stage 4 is the sole source
+    # of rejections; conformal/flagged are populated downstream.
+    body["conformal_scores"] = {}
+    body["flagged_for_review"] = []
+    body["deterministically_rejected"] = []
 
     payload = NormalizedRatesheet.model_validate(body)
     return payload, metadata

@@ -255,6 +255,40 @@ async def test_kn_15_lane_reaches_completed_and_emits_slack_post(
     assert 0 <= len(result["flagged_for_review"]) <= 3
     assert 1 <= len(result["deterministically_rejected"]) <= 3
 
+    # Phase 7 §6.3 / §8.6 (Defect 18c): tail assertion — the inline
+    # OnrampAuditLog writes in _classify, _extract, _normalize, _validate
+    # must produce at least four audit rows for the job. Every row carries
+    # actor='worker' and actor_principal='pipeline-task'.
+    from sqlalchemy import text as sql_text
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from packages.core.db.session import make_async_engine
+    from packages.core.settings import get_settings
+
+    audit_engine = make_async_engine(get_settings())
+    try:
+        audit_factory = async_sessionmaker(audit_engine, expire_on_commit=False)
+        async with audit_factory() as session:
+            audit_rows = (
+                await session.execute(
+                    sql_text(
+                        "SELECT actor, actor_principal, action "
+                        "FROM onramp_audit_log WHERE job_id = :j"
+                    ),
+                    {"j": job_id},
+                )
+            ).all()
+    finally:
+        await audit_engine.dispose()
+    assert len(audit_rows) >= 4, (
+        f"Phase 7 Defect 18c regression: onramp_audit_log has only "
+        f"{len(audit_rows)} rows for job {job_id}; expected ≥4 "
+        f"(classified, extracted, normalized, validated)"
+    )
+    for row in audit_rows:
+        assert row.actor, "Phase 7 §6.3: actor must be non-null"
+        assert row.actor_principal, "Phase 7 §6.3: actor_principal must be non-null"
+
 
 @pytest.mark.asyncio
 async def test_normalize_failure_surfaces_as_status_failed(

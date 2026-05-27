@@ -16,8 +16,9 @@ import asyncio
 import hashlib
 import json
 import logging
+import re
 from datetime import UTC, datetime
-from typing import Any, Literal, cast
+from typing import Any, Final, Literal, cast
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -40,6 +41,11 @@ _TEMPERATURES: tuple[float, float, float] = (0.1, 0.5, 0.9)
 _PER_CALL_TIMEOUT_SECONDS = 20.0
 _TOTAL_BUDGET_SECONDS = 45.0
 _RETRY_BACKOFF_SECONDS = 0.5
+
+# Phase 7 §6.1.3 (Defect 18a carve-out): shape regex matches Stage 4 R1.
+# Shape-violating port codes pass through this stage so apply_hard_rules can
+# reject them with the canonical `port_unknown_unlocode` rule_id.
+_UNLOCODE_SHAPE: Final = re.compile(r"^[A-Z]{2}[A-Z0-9]{3}$")
 
 _SYSTEM_INSTRUCTION = """You are a deterministic identifier normalizer.
 
@@ -259,6 +265,15 @@ async def normalize_lanes(
         origin = await resolve_port_code(resolved_lane.origin_port.code, session)
         destination = await resolve_port_code(resolved_lane.destination_port.code, session)
         if origin.canonical is None or destination.canonical is None:
+            # Phase 7 §6.1.3 (Defect 18a): if the unresolved code(s) fail the
+            # UN/LOCODE shape regex, pass the lane through unchanged so Stage 4
+            # R1 emits the canonical `port_unknown_unlocode` rejection. Only
+            # shape-valid but table-unknown codes get flagged for review.
+            origin_shape_bad = not _UNLOCODE_SHAPE.match(resolved_lane.origin_port.code)
+            dest_shape_bad = not _UNLOCODE_SHAPE.match(resolved_lane.destination_port.code)
+            if origin_shape_bad or dest_shape_bad:
+                final_lanes.append(resolved_lane)
+                continue
             flags.append(
                 FlaggedLane(
                     lane=resolved_lane,

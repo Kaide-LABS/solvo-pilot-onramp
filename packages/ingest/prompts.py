@@ -26,8 +26,13 @@ provided response schema. Strict rules:
   they will be resolved in a later normalization stage.
 - equipment_type must be one of: 20GP, 40GP, 40HC, 20RF, 40RF, OOG, BULK.
 - If a row cannot be confidently extracted as a lane, omit it. Do NOT guess.
-- conformal_scores, flagged_for_review, deterministically_rejected MUST be empty
-  in your response — later stages populate them.
+- Lanes with shape-violating port codes (e.g. 'ZZ@ZZ', 'foo', '12345') MUST be
+  included in `lanes` with the port code passed through unchanged. Do NOT
+  reject them at extraction. Do NOT omit them. Stage 4 validation will reject
+  them with deterministic rule citations.
+- `deterministically_rejected`, `flagged_for_review`, and `conformal_scores`
+  MUST be empty arrays/dicts in your response. Any content you place there
+  will be erased before downstream processing.
 - schema_version MUST be exactly "onramp.v1".
 """
 

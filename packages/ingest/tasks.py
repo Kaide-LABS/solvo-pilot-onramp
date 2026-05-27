@@ -35,6 +35,7 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
 from apps.worker.celery_app import celery_app
+from packages.core.db.base import OnrampAuditLog
 from packages.core.db.repositories import (
     insert_output,
     update_job_status,
@@ -55,6 +56,29 @@ _log = logging.getLogger(__name__)
 # rows stay PII-clean per §3.10.4. Job-id-keyed paths under /tmp/onramp/
 # could leak operator filenames if surfaced verbatim.
 _TMP_PATH_RE = re.compile(r"/tmp/onramp/[^\s'\"]+")  # noqa: S108 — path literal is a redaction pattern, not a tempfile path
+
+# Phase 7 §6.3 (Defect 18c): pipeline tasks write OnrampAuditLog rows inline,
+# atomic with the work they document. The dispatcher's `deliver_audit_log`
+# stays a no-op — no double-insert. Worker tasks run with no HTTP request_id,
+# so request_id is left null; actor/actor_principal are constants.
+_WORKER_ACTOR = "worker"
+_WORKER_ACTOR_PRINCIPAL = "pipeline-task"
+
+
+def _audit_row(job_id: str, action: str, payload: dict[str, Any]) -> OnrampAuditLog:
+    """Build an OnrampAuditLog row for a pipeline-task event.
+
+    Phase 7 §6.3 helper. Caller must `session.add(...)` the result inside the
+    same `session.begin()` block as the work being documented so the audit
+    write commits atomically with the state transition + outbox enqueue.
+    """
+    return OnrampAuditLog(
+        job_id=job_id,
+        actor=_WORKER_ACTOR,
+        actor_principal=_WORKER_ACTOR_PRINCIPAL,
+        action=action,
+        payload=payload,
+    )
 
 
 def _failure_payload(stage: str, exc: BaseException) -> dict[str, Any]:
@@ -82,14 +106,19 @@ async def _commit_failure(factory: Any, job_id: str, stage: str, exc: BaseExcept
     failure-status update. The Celery task is still marked failed at the
     Celery level after the re-raise; this gives the API a durable signal.
     """
+    payload = _failure_payload(stage, exc)
     async with factory() as session, session.begin():
         await update_job_status(session, job_id, new_status="failed", completed=True)
         await enqueue_outbox_event(
             session,
             job_id=job_id,
             event_type="audit_log",
-            payload=_failure_payload(stage, exc),
+            payload=payload,
         )
+        # Phase 7 §6.3 (Defect 18c): inline OnrampAuditLog row for the failure
+        # event. Atomic with the failure-status commit so the API has a
+        # durable audit entry as soon as it sees status='failed'.
+        session.add(_audit_row(job_id, action=stage, payload=payload))
 
 
 async def _recover_requested_slack_channel(factory: Any, job_id: str) -> str | None:
@@ -141,6 +170,20 @@ async def _classify(job_id: str, staging_path: str) -> str:
 
         async with factory() as session, session.begin():
             await update_job_status(session, job_id, new_status="extracting")
+            # Phase 7 §6.3 (Defect 18c): inline audit row for the classify
+            # transition. _classify previously left no audit trail; this
+            # closes the gap and satisfies the 4-row floor in F.5.
+            session.add(
+                _audit_row(
+                    job_id,
+                    action="classified",
+                    payload={
+                        "stage": "classified",
+                        "detected_format": classified.detected_format,
+                        "confidence": classified.confidence,
+                    },
+                )
+            )
         return classified.detected_format
     finally:
         await engine.dispose()
@@ -210,12 +253,15 @@ async def _extract(job_id: str, staging_path: str, fmt: str) -> None:
             # Phase 3 change: extract transitions to "normalizing", not "completed".
             # normalize_lanes_task owns the final completion + outbox audit_log.
             await update_job_status(session, job_id, new_status="normalizing")
+            audit_payload = {"stage": "extracted", "lane_count": len(payload.lanes)}
             await enqueue_outbox_event(
                 session,
                 job_id=job_id,
                 event_type="audit_log",
-                payload={"stage": "extracted", "lane_count": len(payload.lanes)},
+                payload=audit_payload,
             )
+            # Phase 7 §6.3 (Defect 18c): inline audit row.
+            session.add(_audit_row(job_id, action="extracted", payload=audit_payload))
     finally:
         await engine.dispose()
 
@@ -303,16 +349,19 @@ async def _normalize(job_id: str) -> None:
             # Phase 4: normalize transitions to "validating", not "completed".
             # validate_output_task owns the final transition + audit_log.
             await update_job_status(session, job_id, new_status="validating")
+            normalized_audit_payload = {
+                "stage": "normalized",
+                "consensus_clean": sum(1 for c in consensus_results if not c.requires_review),
+                "flagged": len(updated.flagged_for_review),
+            }
             await enqueue_outbox_event(
                 session,
                 job_id=job_id,
                 event_type="audit_log",
-                payload={
-                    "stage": "normalized",
-                    "consensus_clean": sum(1 for c in consensus_results if not c.requires_review),
-                    "flagged": len(updated.flagged_for_review),
-                },
+                payload=normalized_audit_payload,
             )
+            # Phase 7 §6.3 (Defect 18c): inline audit row.
+            session.add(_audit_row(job_id, action="normalized", payload=normalized_audit_payload))
     finally:
         await engine.dispose()
 
@@ -518,23 +567,26 @@ async def _validate(job_id: str) -> None:
                         )
                     )
                 await update_job_status(session, job_id, new_status="completed", completed=True)
+                validated_audit_payload = {
+                    "stage": "validated",
+                    "violations": [v.rule_id for v in violations],
+                    "lane_count": len(validated.lanes),
+                    "rejected_count": len(validated.deterministically_rejected),
+                    "conformal_summary": {
+                        "scored": len(conformal_by_lane),
+                        "low_confidence": len(low_confidence),
+                    },
+                    "correction_triggered": correction_triggers,
+                    "clarifications": len(clarifications),
+                }
                 await enqueue_outbox_event(
                     session,
                     job_id=job_id,
                     event_type="audit_log",
-                    payload={
-                        "stage": "validated",
-                        "violations": [v.rule_id for v in violations],
-                        "lane_count": len(validated.lanes),
-                        "rejected_count": len(validated.deterministically_rejected),
-                        "conformal_summary": {
-                            "scored": len(conformal_by_lane),
-                            "low_confidence": len(low_confidence),
-                        },
-                        "correction_triggered": correction_triggers,
-                        "clarifications": len(clarifications),
-                    },
+                    payload=validated_audit_payload,
                 )
+                # Phase 7 §6.3 (Defect 18c): inline audit row.
+                session.add(_audit_row(job_id, action="validated", payload=validated_audit_payload))
                 # Phase 6.5 (§6.3): enqueue the Slack thread reply alongside
                 # the audit_log row, inside the same transaction.
                 # Transactional-outbox invariant preserved — if validation
