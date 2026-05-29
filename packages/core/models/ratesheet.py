@@ -125,6 +125,26 @@ class RejectionRecord(BaseModel):
     rule_description: str = Field(min_length=1, max_length=256)
 
 
+class ShapeViolatingLane(BaseModel):
+    """Lane lifted from Stage 2 because its port codes failed UN/LOCODE shape.
+
+    Phase 8 §6.1 (Defect 19): `PortCode.code` enforces the canonical regex via
+    Pydantic Field, which means `NormalizedRatesheet.model_validate(body)`
+    rejects shape-violating lanes at the Stage 2 schema gate before Stage 3
+    can apply its carve-out. Pre-scanning shape-violators OUT of `body["lanes"]`
+    before model_validate and routing them through this sentinel schema lets
+    Stage 4 R1 emit canonical `port_unknown_unlocode` rejections without
+    relaxing `PortCode` (the load-bearing white-box anchor stays intact).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    lane_id: str = Field(min_length=1, max_length=64)
+    raw_origin_code: str = Field(min_length=1, max_length=64)
+    raw_destination_code: str = Field(min_length=1, max_length=64)
+    source_row_reference: SourceRow
+
+
 class NormalizedRatesheet(BaseModel):
     """Final pipeline output. Phase 2 populates the extraction half only."""
 
@@ -137,6 +157,11 @@ class NormalizedRatesheet(BaseModel):
     conformal_scores: dict[str, float] = Field(default_factory=dict)
     flagged_for_review: list[FlaggedLane] = Field(default_factory=list)
     deterministically_rejected: list[RejectionRecord] = Field(default_factory=list)
+    # Phase 8 §6.1 (Defect 19): shape-violators lifted out by the Stage 2
+    # pre-scan are surfaced here so `_validate` can re-inject them into
+    # `apply_hard_rules` as synthetic LaneRecord carriers. `default_factory`
+    # keeps pre-Phase-8 OnrampOutput.normalized_payload blobs deserializing.
+    shape_violating_lanes: list[ShapeViolatingLane] = Field(default_factory=list)
     schema_version: Literal["onramp.v1"] = "onramp.v1"
 
 

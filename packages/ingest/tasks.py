@@ -449,6 +449,75 @@ async def _validate(job_id: str) -> None:
 
             validated, violations = apply_hard_rules(normalized)
 
+            # Phase 8 §6.1 (Defect 19): re-inject Stage 2 pre-scanned shape-
+            # violators as synthetic LaneRecord carriers and run them through
+            # apply_hard_rules so R1 emits canonical `port_unknown_unlocode`
+            # rejections. The carrier shape (Build Directive 3) is NOT a real
+            # lane — it's a sentinel wrapper: every non-port field is a stable
+            # placeholder because R1 has precedence over R2..R7 and fires
+            # before any equipment/rate/validity check runs. The synthetic
+            # validity window is intentionally non-degenerate (today, today+1)
+            # per Build Directive 2 so the carrier is internally consistent
+            # even if R1's precedence ever shifts. The real Excel provenance
+            # (source_row_reference) is preserved end-to-end so the resulting
+            # RejectionRecord cites the actual originating cell.
+            shape_violators = normalized.shape_violating_lanes
+            if shape_violators:
+                from datetime import date, timedelta
+                from decimal import Decimal as _Decimal
+
+                from packages.core.models.ratesheet import (
+                    LaneRecord as _LaneRecord,
+                )
+                from packages.core.models.ratesheet import (
+                    NormalizedRatesheet as _NormalizedRatesheet,
+                )
+                from packages.core.models.ratesheet import (
+                    PortCode as _PortCode,
+                )
+
+                _today = date.today()
+                _tomorrow = _today + timedelta(days=1)
+                synthetic_lanes = [
+                    _LaneRecord.model_construct(
+                        lane_id=sv.lane_id,
+                        # PortCode.model_construct bypasses the regex so the
+                        # known-bad code reaches R1 verbatim for shape rejection.
+                        origin_port=_PortCode.model_construct(code=sv.raw_origin_code),
+                        destination_port=_PortCode.model_construct(code=sv.raw_destination_code),
+                        equipment_type="40HC",  # sentinel — R1 fires first
+                        commodity_code=None,
+                        base_rate_usd=_Decimal("1"),  # sentinel
+                        surcharges=[],
+                        transit_time_days=None,
+                        validity_start=_today,
+                        validity_end=_tomorrow,
+                        source_row_reference=sv.source_row_reference,
+                    )
+                    for sv in shape_violators
+                ]
+                synthetic_rs = _NormalizedRatesheet.model_construct(
+                    job_id=validated.job_id,
+                    prospect_id=validated.prospect_id,
+                    extraction_metadata=validated.extraction_metadata,
+                    lanes=synthetic_lanes,
+                    conformal_scores={},
+                    flagged_for_review=[],
+                    deterministically_rejected=[],
+                    shape_violating_lanes=[],
+                    schema_version="onramp.v1",
+                )
+                synthetic_validated, synthetic_violations = apply_hard_rules(synthetic_rs)
+                validated = validated.model_copy(
+                    update={
+                        "deterministically_rejected": (
+                            list(validated.deterministically_rejected)
+                            + list(synthetic_validated.deterministically_rejected)
+                        ),
+                    }
+                )
+                violations = list(violations) + list(synthetic_violations)
+
             calibration = load_calibration(Path("fixtures/conformal_calibration_v1.json"))
 
             async with factory() as session:

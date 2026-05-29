@@ -265,10 +265,25 @@ async def normalize_lanes(
         origin = await resolve_port_code(resolved_lane.origin_port.code, session)
         destination = await resolve_port_code(resolved_lane.destination_port.code, session)
         if origin.canonical is None or destination.canonical is None:
-            # Phase 7 §6.1.3 (Defect 18a): if the unresolved code(s) fail the
-            # UN/LOCODE shape regex, pass the lane through unchanged so Stage 4
-            # R1 emits the canonical `port_unknown_unlocode` rejection. Only
-            # shape-valid but table-unknown codes get flagged for review.
+            # Phase 7 §6.1.3 (Defect 18a) — narrowed scope per Phase 8 §6.1.
+            #
+            # Originally intended to pass shape-violating codes through to
+            # Stage 4 R1 unchanged. After Phase 8 (Defect 19 fix), shape-
+            # violators are pre-scanned out of `body["lanes"]` inside
+            # `extract_excel_payload` BEFORE `NormalizedRatesheet.model_validate`
+            # fires, so they never reach this code path. This branch now
+            # operates as defense-in-depth only: should a shape-violator
+            # somehow slip past the pre-scan, we still keep the lane flowing
+            # rather than flagging it. The load-bearing path for shape-
+            # violator rejection is the Stage 4 re-injection in
+            # `_validate` (Phase 8 §6.1) — R1 fires on the synthetic
+            # LaneRecord carriers there.
+            #
+            # The remaining live responsibility of this branch is the
+            # shape-valid but table-unknown case (e.g. `XXAAA` — passes the
+            # UN/LOCODE regex but absent from `un_locode_reference`): those
+            # lanes flow to Stage 4 and either reach the conformal scorer or
+            # surface as `port_obfuscation_unresolved` flags below.
             origin_shape_bad = not _UNLOCODE_SHAPE.match(resolved_lane.origin_port.code)
             dest_shape_bad = not _UNLOCODE_SHAPE.match(resolved_lane.destination_port.code)
             if origin_shape_bad or dest_shape_bad:

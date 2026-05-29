@@ -10,15 +10,22 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import Any, Final, Literal, cast
 
 import orjson
 from openpyxl import load_workbook
+from pydantic import ValidationError
 
 from packages.compliance.vertex_client import get_vertex_client
-from packages.core.models.ratesheet import ExtractionMetadata, NormalizedRatesheet
+from packages.core.models.ratesheet import (
+    ExtractionMetadata,
+    NormalizedRatesheet,
+    ShapeViolatingLane,
+    SourceRow,
+)
 from packages.core.settings import Settings
 from packages.ingest.prompts import (
     PROMPT_VERSION,
@@ -34,6 +41,87 @@ _VERTEX_BUDGET_SECONDS = 30.0
 _RETRY_BACKOFF_SECONDS = 0.5
 _MODEL_ID = "gemini-3.1-flash-lite"
 _TEMPERATURE = 0.1
+
+# Phase 8 §6.1 (Defect 19): canonical UN/LOCODE shape regex — identical to the
+# `PortCode.code` Field pattern. Lanes whose port codes fail this regex are
+# pre-scanned out of `body["lanes"]` before `NormalizedRatesheet.model_validate`
+# so the Stage 2 schema gate doesn't reject the whole payload. They are routed
+# to Stage 4 R1 via `shape_violating_lanes` for canonical `port_unknown_unlocode`
+# rejection emission.
+_UNLOCODE_SHAPE: Final = re.compile(r"^[A-Z]{2}[A-Z0-9]{3}$")
+
+
+def _coerce_source_row_reference(
+    raw: Any,
+    *,
+    sheet_name: str,
+    idx: int,
+) -> SourceRow:
+    """Use the LLM-supplied source_row_reference when well-formed, else synthesize.
+
+    Phase 8 §6.1 / Build Directive 1: shape-violating lanes carry their real
+    Excel provenance forward so the eventual `RejectionRecord` cites the actual
+    cell. Only when the LLM omitted (or malformed) the reference do we fall
+    back to a positional synthesis.
+    """
+    if isinstance(raw, dict):
+        try:
+            return SourceRow.model_validate(raw)
+        except ValidationError:
+            pass
+    # Fallback: synthesize a positional reference. `idx` is the array position
+    # in body["lanes"]; +2 maps to the typical Excel layout of header row + 1.
+    fallback_row = idx + 2
+    return SourceRow(
+        sheet_name=sheet_name[:64] if sheet_name else "Rates",
+        row_number=fallback_row,
+        cell_reference=f"A{fallback_row}",
+    )
+
+
+def _pre_scan_shape_violators(
+    body: dict[str, Any],
+    sheet_name: str,
+) -> list[ShapeViolatingLane]:
+    """Lift shape-violating lanes out of `body['lanes']` before model_validate.
+
+    Phase 8 §6.1 (Defect 19): `PortCode`'s regex rejects shape-violators at
+    `NormalizedRatesheet.model_validate(body)`, so the Phase 7 §6.1.3
+    normalizer carve-out is unreachable in production. Pre-scanning here lifts
+    them out cleanly; `_validate` re-injects them into Stage 4 R1 as synthetic
+    `LaneRecord` carriers for canonical `port_unknown_unlocode` emission.
+
+    Per Build Directive 1, the violator's real `source_row_reference` (emitted
+    by the LLM for the originating cell) is preserved so the eventual
+    `RejectionRecord` cites the true Excel coordinate, not a positional guess.
+    """
+    surviving: list[dict[str, Any]] = []
+    violating: list[ShapeViolatingLane] = []
+    for idx, lane in enumerate(body.get("lanes", [])):
+        origin_code = (lane.get("origin_port") or {}).get("code", "")
+        dest_code = (lane.get("destination_port") or {}).get("code", "")
+        if (
+            isinstance(origin_code, str)
+            and isinstance(dest_code, str)
+            and _UNLOCODE_SHAPE.match(origin_code)
+            and _UNLOCODE_SHAPE.match(dest_code)
+        ):
+            surviving.append(lane)
+            continue
+        violating.append(
+            ShapeViolatingLane(
+                lane_id=str(lane.get("lane_id") or f"shape_violator_{idx}"),
+                raw_origin_code=str(origin_code or ""),
+                raw_destination_code=str(dest_code or ""),
+                source_row_reference=_coerce_source_row_reference(
+                    lane.get("source_row_reference"),
+                    sheet_name=sheet_name,
+                    idx=idx,
+                ),
+            )
+        )
+    body["lanes"] = surviving
+    return violating
 
 
 class ExcelTooLargeError(Exception):
@@ -194,6 +282,15 @@ async def extract_excel_payload(
     body["prospect_id"] = prospect_id
     body["extraction_metadata"] = metadata.model_dump(mode="json")
     body["schema_version"] = "onramp.v1"
+
+    # Phase 8 §6.1 (Defect 19): pre-scan body["lanes"] for shape-violators
+    # BEFORE the force-overwrite and BEFORE `model_validate`. The pre-scan
+    # mutates body["lanes"] in place (surviving lanes only) and returns the
+    # lifted violators, which are routed to Stage 4 R1 via the new
+    # `shape_violating_lanes` field on NormalizedRatesheet.
+    sheet_label = "Rates"
+    shape_violating = _pre_scan_shape_violators(body, sheet_label)
+
     # Phase 7 §6.1.1 (Defect 18a): force-overwrite, not setdefault. The Stage 2
     # LLM occasionally smuggles non-empty values into these fields with
     # invented rule_ids like "INVALID_PORT_CODE". Stage 4 is the sole source
@@ -201,6 +298,16 @@ async def extract_excel_payload(
     body["conformal_scores"] = {}
     body["flagged_for_review"] = []
     body["deterministically_rejected"] = []
+    body["shape_violating_lanes"] = [v.model_dump(mode="json") for v in shape_violating]
 
-    payload = NormalizedRatesheet.model_validate(body)
+    # Phase 8 §6.2 (Defect 20): wrap model_validate so any Pydantic violation
+    # surfaces as ExtractionError. Without this, ValidationError propagates
+    # past `_extract`'s `except (ExcelTooLargeError, ExtractionError)` handler
+    # and the job sticks at `status=extracting` indefinitely.
+    try:
+        payload = NormalizedRatesheet.model_validate(body)
+    except ValidationError as exc:
+        raise ExtractionError(
+            f"stage2_schema_violation: {exc.error_count()} pydantic error(s)"
+        ) from exc
     return payload, metadata
