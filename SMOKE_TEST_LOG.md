@@ -242,3 +242,40 @@ Auth gating OK (no-auth 403; admin-token + fake job 404). Audit **data correct**
 F.4 passed but F.5 is blocked by Defect 22. Demo gated until the audit-schema reconciliation lands and F.5 re-runs green against the existing BPC job (no new Vertex spend needed).
 
 Next: human decision on Defect 22 (Option A/B/C in `HUMAN_INTERVENTION_REQUEST_V11.md`), patch + unit tests, re-run F.5 only.
+
+---
+
+## Step 4 V11.5 — F.5 PASSED (Defect 22 closed) — ALL STAGE F GREEN (2026-05-31)
+
+Phase 9.1 reconciled the audit read-model (`packages/core/models/audit.py:AuditLogEntry`) to the live pipeline writer (Phase 7 §6.3): `actor=Literal["worker"]`, `AuditAction` = `{classified, extracted, normalized, validated, extract_failed, normalize_failed, validate_failed}` — the exact `OnrampAuditLog.action` write surface (success + `_commit_failure` failure stages). The dead Phase 4 §3.1 `*_complete` long-forms and `{system,operator,external_webhook}` actor set are deleted (single vocabulary, no duplication). Commit `4d5c239`.
+
+**Writer-surface discovery (load-bearing):** the sole `OnrampAuditLog` writer is `tasks.py:_audit_row`. `ingress_received` lives only in an outbox payload (no-op delivery), never an audit row, so it is intentionally absent. **Access-log twin: no drift** — `OnrampAccessLog` has no row writer and no reader endpoint; the only emitted `route` (`/internal/v1/audit/{id}`) is already in `AuditRoute`. `AccessLogEntry` left untouched.
+
+### Stage F.5 — audit trail — ✅ PASS (re-run, no new Vertex spend)
+
+api container rebuilt on the reconciled model (`/v1/health` healthy). Against the existing V11 BPC job `7c042249a37b40379301a45b9e7b6116` (4 audit rows already in DB):
+- no-auth → **403** ✅; admin-token + fake job → **404** ✅
+- **real-job audit → HTTP 200** ✅ (the V11 blocker, resolved)
+- 4 entries (`classified, extracted, normalized, validated`), `actor=worker` / `actor_principal=pipeline-task`, all 6 fields, **no PII**.
+
+### Regression lock
+
+`tests/unit/test_audit_models.py`: every live action (7 values) validates through the read-model; an invalid action still rejects; the stale Phase 4 vocabulary no longer validates. Unit 161 passed, integration 11 passed/12 infra-skipped; ruff + mypy --strict clean on the model.
+
+### Stage F final standing
+
+| Stage | Verdict | Version |
+|-------|---------|---------|
+| F.3 (K+N happy path) | ✅ | V7 |
+| BNR (broken_no_rates) | ✅ | V9 |
+| BME (broken_malformed_edifact) | ✅ | V9 |
+| F.4 (broken_impossible_port_codes) | ✅ | V11 |
+| F.5 (audit trail) | ✅ | V11.5 |
+
+### Vertex AI cost
+
+≈ **$0** — F.5 reads existing audit data; no LLM calls. Cumulative Sprint 2 ≈ $10–15.
+
+### Demo recording — ✅ AUTHORIZED
+
+All 22 defects across Sprint 2 resolved. Every Stage F gate green. Demo recording authorized for the Vidyard session with Isaac.
