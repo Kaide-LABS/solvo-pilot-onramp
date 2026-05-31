@@ -99,30 +99,73 @@ def _wrap_clean(*lanes: LaneRecord) -> NormalizedRatesheet:
 # ---------------------------------------------------------------------------
 
 
+def _bpc_cell_list() -> list[dict[str, Any]]:
+    """Synthesise the cell list `_build_cell_list` would produce for
+    `fixtures/broken_impossible_port_codes.xlsx`: header row + 5 data rows
+    with two shape-violators at A4 (`ZZ@ZZ`) and B6 (`QQ@QQ`).
+    """
+    headers = [
+        "origin",
+        "destination",
+        "equipment",
+        "base_rate_usd",
+        "validity_start",
+        "validity_end",
+    ]
+    cells: list[dict[str, Any]] = []
+    for col, label in enumerate(headers, start=1):
+        cells.append(
+            {
+                "sheet": "Rates",
+                "row": 1,
+                "col": col,
+                "coord": f"{chr(64 + col)}1",
+                "value": label,
+                "is_merged_anchor": False,
+                "merge_range": None,
+            }
+        )
+    rows = [
+        ("DEHAM", "USNYC", "40HC", 2100, "2026-06-01", "2026-12-31"),
+        ("NLRTM", "SGSIN", "40HC", 1850, "2026-06-01", "2026-12-31"),
+        ("ZZ@ZZ", "USLAX", "40HC", 2450, "2026-06-01", "2026-12-31"),
+        ("USLAX", "JPYOK", "20GP", 1750, "2026-06-01", "2026-12-31"),
+        ("DEHAM", "QQ@QQ", "40HC", 2200, "2026-06-01", "2026-12-31"),
+    ]
+    for r_idx, row_vals in enumerate(rows, start=2):
+        for col, value in enumerate(row_vals, start=1):
+            cells.append(
+                {
+                    "sheet": "Rates",
+                    "row": r_idx,
+                    "col": col,
+                    "coord": f"{chr(64 + col)}{r_idx}",
+                    "value": value,
+                    "is_merged_anchor": False,
+                    "merge_range": None,
+                }
+            )
+    return cells
+
+
 def test_full_pipeline_broken_impossible_port_codes() -> None:
-    """Phase 8 §6.3 / Defect 19 — Stage 2 pre-scan + Stage 4 R1 emit canonical rejection.
+    """Phase 9 §6.3 / Defect 21 — V10-faithful: shape-violation detection works
+    even when Flash returns ONLY clean lanes.
 
-    Exercises the LIVE Pydantic schema gate. Vertex is short-circuited but the
-    LLM body returned contains both shape-valid and shape-violating port codes,
-    and `extract_excel_payload`'s pre-scan must:
-      (a) NOT raise pydantic.ValidationError on the violators,
-      (b) lift the violators into `payload.shape_violating_lanes`,
-      (c) preserve the LLM-supplied `source_row_reference` (Build Directive 1),
-      (d) leave the shape-valid lanes in `payload.lanes`.
-
-    Then the Stage 4 re-injection path in `_validate` synthesizes carrier
-    LaneRecords from `shape_violating_lanes` and feeds them to `apply_hard_rules`
-    so R1 emits canonical `port_unknown_unlocode` rejections — NOT an LLM-emitted
-    free-form ID like `INVALID_PORT_CODE` (the V8 regression detector).
-
-    No `PortCode.model_construct(...)` appears in this test body's entry path.
+    At V10 the live Flash silently omitted the two shape-violating rows (A4
+    `ZZ@ZZ`, A6 `QQ@QQ`) from `body["lanes"]` — lane-ID gap `1,2,4` (no `3`)
+    was the smoking gun. Phase 9 moves shape detection upstream of Flash via
+    `_identify_port_columns` + `_scan_cells_for_shape_violators`. This test
+    locks the new contract: Flash mock returns ONLY 3 clean lanes (exactly
+    V10's observed behaviour) and the pre-LLM scan STILL produces 2 violators
+    with real Excel cell coords. The fix cannot depend on Flash's cooperation.
     """
     from packages.ingest import excel_extractor as ex
     from packages.ingest.rules_engine import apply_hard_rules
 
-    # Build the LLM body the live stack would return for the
-    # broken_impossible_port_codes.xlsx fixture: 1 clean lane + 2 shape-
-    # violating lanes (origin and destination respectively).
+    # Flash mock: returns ONLY the 3 clean lanes V10 observed live — the bad
+    # rows are NOT in body["lanes"]. The pre-LLM scan has to catch them via
+    # the cell list.
     llm_body: dict[str, Any] = {
         "job_id": "placeholder",
         "prospect_id": "placeholder",
@@ -130,8 +173,8 @@ def test_full_pipeline_broken_impossible_port_codes() -> None:
         "extraction_metadata": {
             "extractor_model": "gemini-3.1-flash-lite",
             "extracted_at": _NOW.isoformat(),
-            "prompt_version": "phase8.test",
-            "cell_count": 30,
+            "prompt_version": "phase9.test",
+            "cell_count": 36,
         },
         "lanes": [
             {
@@ -147,59 +190,57 @@ def test_full_pipeline_broken_impossible_port_codes() -> None:
                 "validity_end": "2026-12-31",
                 "source_row_reference": {
                     "sheet_name": "Rates",
+                    "row_number": 2,
+                    "cell_reference": "A2",
+                },
+            },
+            {
+                "lane_id": "L2",
+                "origin_port": {"code": "NLRTM"},
+                "destination_port": {"code": "SGSIN"},
+                "equipment_type": "40HC",
+                "commodity_code": None,
+                "base_rate_usd": "1850",
+                "surcharges": [],
+                "transit_time_days": 22,
+                "validity_start": "2026-06-01",
+                "validity_end": "2026-12-31",
+                "source_row_reference": {
+                    "sheet_name": "Rates",
                     "row_number": 3,
                     "cell_reference": "A3",
                 },
             },
             {
-                "lane_id": "L2",
-                "origin_port": {"code": "ZZ@ZZ"},  # shape-violating
-                "destination_port": {"code": "USLAX"},
-                "equipment_type": "40HC",
+                "lane_id": "L4",
+                "origin_port": {"code": "USLAX"},
+                "destination_port": {"code": "JPYOK"},
+                "equipment_type": "20GP",
                 "commodity_code": None,
-                "base_rate_usd": "1800",
+                "base_rate_usd": "1750",
                 "surcharges": [],
-                "transit_time_days": 18,
+                "transit_time_days": 12,
                 "validity_start": "2026-06-01",
                 "validity_end": "2026-12-31",
                 "source_row_reference": {
                     "sheet_name": "Rates",
-                    "row_number": 4,
-                    "cell_reference": "A4",
-                },
-            },
-            {
-                "lane_id": "L3",
-                "origin_port": {"code": "DEHAM"},
-                "destination_port": {"code": "QQ@QQ"},  # shape-violating
-                "equipment_type": "40HC",
-                "commodity_code": None,
-                "base_rate_usd": "1900",
-                "surcharges": [],
-                "transit_time_days": 16,
-                "validity_start": "2026-06-01",
-                "validity_end": "2026-12-31",
-                "source_row_reference": {
-                    "sheet_name": "Rates",
-                    "row_number": 6,
-                    "cell_reference": "B6",
+                    "row_number": 5,
+                    "cell_reference": "A5",
                 },
             },
         ],
-        # Stage 2 LLM occasionally smuggles these — Phase 7 §6.1.1 force-overwrite
-        # erases them; this test mimics the smuggling so we verify both fixes
-        # work together.
+        # Smuggled fields — Phase 7 §6.1.1 force-overwrite still erases them.
         "conformal_scores": {"L2": 0.42},
         "flagged_for_review": [],
         "deterministically_rejected": [
             {
                 "source_row_reference": {
                     "sheet_name": "Rates",
-                    "row_number": 4,
-                    "cell_reference": "A4",
+                    "row_number": 2,
+                    "cell_reference": "A2",
                 },
-                "lane_id": "L2",
-                "rule_id": "INVALID_PORT_CODE",  # LLM-smuggled — must be erased
+                "lane_id": "L1",
+                "rule_id": "INVALID_PORT_CODE",
                 "rule_description": "made-up rejection",
             }
         ],
@@ -207,14 +248,19 @@ def test_full_pipeline_broken_impossible_port_codes() -> None:
 
     fake_response = MagicMock()
     fake_response.text = json.dumps(llm_body)
+    captured_prompt_cells: list[list[dict[str, Any]]] = []
 
-    async def fake_generate(_client: Any, _contents: str, _schema: dict[str, Any]) -> Any:
+    async def fake_generate(_client: Any, contents: str, _schema: dict[str, Any]) -> Any:
+        # Extract the JSON-encoded cells block to verify Build Directive 2:
+        # Flash must never receive a violating-row cell.
+        marker = "Cells:\n"
+        if marker in contents:
+            cells_json = contents.split(marker, 1)[1].strip()
+            captured_prompt_cells.append(json.loads(cells_json))
         return fake_response
 
     async def fake_to_thread(func: Any, *args: Any, **kwargs: Any) -> Any:
-        # Bypass the openpyxl file read; the body is supplied by the Vertex
-        # mock. Return a non-empty cells list so cell_count > 0.
-        return [{"sheet": "Rates", "coord": "A1", "value": "stub"}]
+        return _bpc_cell_list()
 
     async def _run() -> tuple[NormalizedRatesheet, ExtractionMetadata]:
         settings = MagicMock()
@@ -225,36 +271,45 @@ def test_full_pipeline_broken_impossible_port_codes() -> None:
         ):
             return await ex.extract_excel_payload(
                 Path("fixtures/broken_impossible_port_codes.xlsx"),
-                "job-phase8-prescan",
-                "prosp-phase8",
+                "job-phase9-prescan",
+                "prosp-phase9",
                 settings,
             )
 
     payload, _meta_out = asyncio.run(_run())
 
-    # (a) No ValidationError raised; payload constructed.
+    # Payload constructed despite Flash never reporting the bad rows.
     assert isinstance(payload, NormalizedRatesheet)
-    # (b) Pre-scan lifted both violators.
+
+    # (criterion 15) Pre-LLM scan lifted both violators with REAL cell coords.
     assert len(payload.shape_violating_lanes) == 2
-    by_id = {sv.lane_id: sv for sv in payload.shape_violating_lanes}
-    assert by_id["L2"].raw_origin_code == "ZZ@ZZ"
-    assert by_id["L2"].raw_destination_code == "USLAX"
-    assert by_id["L3"].raw_origin_code == "DEHAM"
-    assert by_id["L3"].raw_destination_code == "QQ@QQ"
-    # (c) Real source_row_reference preserved (Build Directive 1).
-    assert by_id["L2"].source_row_reference.cell_reference == "A4"
-    assert by_id["L2"].source_row_reference.row_number == 4
-    assert by_id["L3"].source_row_reference.cell_reference == "B6"
-    assert by_id["L3"].source_row_reference.row_number == 6
-    # (d) Only the shape-valid lane survives in payload.lanes.
-    assert len(payload.lanes) == 1
-    assert payload.lanes[0].lane_id == "L1"
+    by_row = {sv.source_row_reference.row_number: sv for sv in payload.shape_violating_lanes}
+    assert by_row[4].raw_origin_code == "ZZ@ZZ"
+    assert by_row[4].raw_destination_code == "USLAX"
+    assert by_row[4].source_row_reference.cell_reference == "A4"
+    assert by_row[6].raw_origin_code == "DEHAM"
+    assert by_row[6].raw_destination_code == "QQ@QQ"
+    assert by_row[6].source_row_reference.cell_reference == "B6"
+    # Pre-LLM synthetic lane_id is `shape_violator_<sheet>_<row>`.
+    for sv in payload.shape_violating_lanes:
+        assert sv.lane_id.startswith("shape_violator_Rates_")
+
+    # Build Directive 2: Flash physically never sees the violating rows.
+    assert captured_prompt_cells, "Flash mock should have captured the prompt cells"
+    flash_cells = captured_prompt_cells[0]
+    for cell in flash_cells:
+        assert cell.get("row") not in {4, 6} or cell.get("sheet") != "Rates", (
+            f"Build Directive 2 violation: Flash saw cell {cell.get('coord')} on a violating row"
+        )
+
+    # Lanes Flash did return survive into payload.lanes (3 clean lanes).
+    assert len(payload.lanes) == 3
     # Phase 7 §6.1.1 force-overwrite still runs: smuggled rejections erased.
     assert payload.deterministically_rejected == []
     assert payload.conformal_scores == {}
 
-    # Mirror `_validate`'s re-injection: synthesize carrier LaneRecords from
-    # shape_violating_lanes and run apply_hard_rules over them.
+    # Mirror `_validate`'s re-injection so we exercise the Phase 8 Stage 4
+    # carrier path end-to-end — UNCHANGED by Phase 9.
     _today = date.today()
     _tomorrow = _today + timedelta(days=1)
     synthetic_lanes = [
@@ -289,19 +344,175 @@ def test_full_pipeline_broken_impossible_port_codes() -> None:
     rejected = synthetic_validated.deterministically_rejected
     assert len(rejected) == 2
     assert {r.rule_id for r in rejected} == {"port_unknown_unlocode"}
-    # Defect 18a regression detector — LLM-emitted free-form IDs forbidden.
     for r in rejected:
         assert r.rule_id != "INVALID_PORT_CODE"
-        assert r.lane_id in {"L2", "L3"}
         assert r.rule_description, "Phase 6.9 value-citing rule_description missing"
-    # Real Excel provenance survives end-to-end (Build Directive 1).
-    refs = {r.lane_id: r.source_row_reference for r in rejected}
-    assert refs["L2"].cell_reference == "A4"
-    assert refs["L3"].cell_reference == "B6"
+    refs_by_row = {r.source_row_reference.row_number: r.source_row_reference for r in rejected}
+    assert refs_by_row[4].cell_reference == "A4"
+    assert refs_by_row[6].cell_reference == "B6"
     assert [v.rule_id for v in synthetic_violations] == [
         "port_unknown_unlocode",
         "port_unknown_unlocode",
     ]
+
+
+# ---------------------------------------------------------------------------
+# Phase 9 §6.3 — pre-LLM scan unit-level integration tests
+# ---------------------------------------------------------------------------
+
+
+def test_pre_llm_scan_identifies_labeled_origin_destination_columns() -> None:
+    """Phase 9 §6.1 — `_identify_port_columns` matches on the label set
+    (Build Directive 1) and `_scan_cells_for_shape_violators` lifts violating
+    rows with REAL cell coordinates from the cell list.
+    """
+    from packages.ingest import excel_extractor as ex
+
+    cells = _bpc_cell_list()
+    column_map = ex._identify_port_columns(cells)
+    assert column_map is not None
+    assert column_map["Rates"]["origin_col"] == 1
+    assert column_map["Rates"]["destination_col"] == 2
+    assert column_map["Rates"]["header_row"] == 1
+
+    surviving, violators = ex._scan_cells_for_shape_violators(cells, column_map)
+    # Violators carry real coords, not positional synthesis.
+    by_row = {v.source_row_reference.row_number: v for v in violators}
+    assert set(by_row) == {4, 6}
+    assert by_row[4].source_row_reference.cell_reference == "A4"
+    assert by_row[4].raw_origin_code == "ZZ@ZZ"
+    assert by_row[4].raw_destination_code == "USLAX"
+    assert by_row[6].source_row_reference.cell_reference == "B6"
+    assert by_row[6].raw_origin_code == "DEHAM"
+    assert by_row[6].raw_destination_code == "QQ@QQ"
+    # Surviving cell list excludes every cell on a violating row (Directive 2).
+    for cell in surviving:
+        assert (cell["sheet"], cell["row"]) not in {("Rates", 4), ("Rates", 6)}
+
+
+def test_pre_llm_scan_falls_back_when_columns_unlabeled() -> None:
+    """Phase 9 §6.1 — when no row contains both an origin-label AND a
+    destination-label cell, `_identify_port_columns` returns `None`
+    (degrades to fallback rather than misidentifying columns).
+    """
+    from packages.ingest import excel_extractor as ex
+
+    # Header row uses opaque labels — pre-LLM scan can't resolve column roles.
+    cells: list[dict[str, Any]] = []
+    for col, label in enumerate(["col1", "col2", "col3"], start=1):
+        cells.append(
+            {
+                "sheet": "Rates",
+                "row": 1,
+                "col": col,
+                "coord": f"{chr(64 + col)}1",
+                "value": label,
+                "is_merged_anchor": False,
+                "merge_range": None,
+            }
+        )
+    # Even a row with a shape-violating port string is left alone — the
+    # pre-LLM scan refuses to guess column roles.
+    for col, value in enumerate(["ZZ@ZZ", "USLAX", "40HC"], start=1):
+        cells.append(
+            {
+                "sheet": "Rates",
+                "row": 2,
+                "col": col,
+                "coord": f"{chr(64 + col)}2",
+                "value": value,
+                "is_merged_anchor": False,
+                "merge_range": None,
+            }
+        )
+    assert ex._identify_port_columns(cells) is None
+
+
+def test_pre_llm_scan_handles_partial_sheet_coverage() -> None:
+    """Phase 9 §6.1 — multi-sheet workbook with one labeled sheet and one
+    unlabeled sheet falls back entirely. Per Directive 1, a partial scan
+    creates a silent-correctness trap; the all-sheets-resolve rule prevents it.
+    """
+    from packages.ingest import excel_extractor as ex
+
+    cells = _bpc_cell_list()
+    # Add a second sheet with opaque headers.
+    for col, label in enumerate(["alpha", "beta", "gamma"], start=1):
+        cells.append(
+            {
+                "sheet": "Other",
+                "row": 1,
+                "col": col,
+                "coord": f"{chr(64 + col)}1",
+                "value": label,
+                "is_merged_anchor": False,
+                "merge_range": None,
+            }
+        )
+    for col, value in enumerate(["WW@WW", "USNYC", "40HC"], start=1):
+        cells.append(
+            {
+                "sheet": "Other",
+                "row": 2,
+                "col": col,
+                "coord": f"{chr(64 + col)}2",
+                "value": value,
+                "is_merged_anchor": False,
+                "merge_range": None,
+            }
+        )
+    assert ex._identify_port_columns(cells) is None
+
+
+def test_pre_llm_scan_skips_banner_row_and_finds_real_headers() -> None:
+    """Phase 9 §6.1 / Build Directive 1 — a banner string above the real
+    headers must NOT cause misidentification. The label-matching header
+    search continues past non-label rows.
+    """
+    from packages.ingest import excel_extractor as ex
+
+    cells: list[dict[str, Any]] = [
+        {
+            "sheet": "Rates",
+            "row": 1,
+            "col": 1,
+            "coord": "A1",
+            "value": "Q2 2026 Spot Rates",
+            "is_merged_anchor": True,
+            "merge_range": "A1:F1",
+        }
+    ]
+    for col, label in enumerate(["origin", "destination", "equipment"], start=1):
+        cells.append(
+            {
+                "sheet": "Rates",
+                "row": 2,
+                "col": col,
+                "coord": f"{chr(64 + col)}2",
+                "value": label,
+                "is_merged_anchor": False,
+                "merge_range": None,
+            }
+        )
+    for col, value in enumerate(["ZZ@ZZ", "USNYC", "40HC"], start=1):
+        cells.append(
+            {
+                "sheet": "Rates",
+                "row": 3,
+                "col": col,
+                "coord": f"{chr(64 + col)}3",
+                "value": value,
+                "is_merged_anchor": False,
+                "merge_range": None,
+            }
+        )
+    column_map = ex._identify_port_columns(cells)
+    assert column_map is not None
+    assert column_map["Rates"]["header_row"] == 2
+    _, violators = ex._scan_cells_for_shape_violators(cells, column_map)
+    assert len(violators) == 1
+    assert violators[0].source_row_reference.cell_reference == "A3"
+    assert violators[0].raw_origin_code == "ZZ@ZZ"
 
 
 # ---------------------------------------------------------------------------

@@ -83,7 +83,7 @@ async def test_extract_smoke_per_fixture(monkeypatch: pytest.MonkeyPatch, filena
     assert payload.job_id == "j1"
     assert payload.prospect_id == "p123"
     assert metadata.extractor_model == "gemini-3.1-flash-lite"
-    assert metadata.prompt_version == "stage2.excel.v1"
+    assert metadata.prompt_version == "stage2.excel.v2"
     assert payload.schema_version == "onramp.v1"
 
 

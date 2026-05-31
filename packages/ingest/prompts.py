@@ -7,7 +7,7 @@ from typing import Any
 
 from packages.core.models.ratesheet import NormalizedRatesheet
 
-PROMPT_VERSION = "stage2.excel.v1"
+PROMPT_VERSION = "stage2.excel.v2"
 
 SYSTEM_INSTRUCTIONS = """You are a deterministic data normalizer for ocean freight ratesheets.
 You receive a JSON array of cells extracted from a single spreadsheet, where each cell is
@@ -25,11 +25,9 @@ provided response schema. Strict rules:
   Carrier-internal port aliases (e.g., "BSAS", "NYC") flow through as-is —
   they will be resolved in a later normalization stage.
 - equipment_type must be one of: 20GP, 40GP, 40HC, 20RF, 40RF, OOG, BULK.
-- If a row cannot be confidently extracted as a lane, omit it. Do NOT guess.
-- Lanes with shape-violating port codes (e.g. 'ZZ@ZZ', 'foo', '12345') MUST be
-  included in `lanes` with the port code passed through unchanged. Do NOT
-  reject them at extraction. Do NOT omit them. Stage 4 validation will reject
-  them with deterministic rule citations.
+- Omit a row only when it contains no lane data at all — for example, blank
+  rows, section headers, or rows missing both port columns AND the rate
+  column. If a row has a port column populated, emit a lane for it.
 - `deterministically_rejected`, `flagged_for_review`, and `conformal_scores`
   MUST be empty arrays/dicts in your response. Any content you place there
   will be erased before downstream processing.

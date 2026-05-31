@@ -124,6 +124,186 @@ def _pre_scan_shape_violators(
     return violating
 
 
+# Phase 9 §6.1 (Defect 21): canonical origin/destination header labels for the
+# deterministic pre-LLM shape scan. Case-insensitive match against cell text
+# after `.strip().lower()`. The primary path moves shape-violation detection
+# upstream of Flash so Flash's row-omission behavior (V10 evidence) can no
+# longer suppress it. When labels can't be found on a sheet, the Phase 8
+# post-LLM `_pre_scan_shape_violators` carries the load as fallback.
+_ORIGIN_LABELS: Final = frozenset(
+    {
+        "origin",
+        "origin_port",
+        "origin port",
+        "pol",
+        "load_port",
+        "load port",
+        "port_of_loading",
+        "port of loading",
+    }
+)
+_DESTINATION_LABELS: Final = frozenset(
+    {
+        "destination",
+        "destination_port",
+        "destination port",
+        "pod",
+        "discharge_port",
+        "discharge port",
+        "port_of_discharge",
+        "port of discharge",
+    }
+)
+
+
+def _identify_port_columns(
+    cells: list[dict[str, Any]],
+) -> dict[str, dict[str, int]] | None:
+    """Identify origin/destination column indices per sheet by header-label match.
+
+    Phase 9 §6.1 / Build Directive 1 (Defect 21): header detection MUST match
+    on the known label set, not "the lowest string row." A banner/title cell
+    above the real headers must NOT cause misidentification — either the
+    labels are found on some row (correct column indices) or this function
+    returns `None` and the orchestrator falls back to the Phase 8 post-LLM
+    path. False negatives that look like clean passes are forbidden.
+
+    Returns a mapping `{sheet_title: {"origin_col": int, "destination_col": int,
+    "header_row": int}}` ONLY when every sheet present in the cell list has
+    both an origin-label header AND a destination-label header on the SAME
+    row. Returns `None` otherwise (fallback signal).
+    """
+    cells_by_sheet: dict[str, list[dict[str, Any]]] = {}
+    for cell in cells:
+        cells_by_sheet.setdefault(cell.get("sheet", ""), []).append(cell)
+    if not cells_by_sheet:
+        return None
+
+    column_map: dict[str, dict[str, int]] = {}
+    for sheet_title, sheet_cells in cells_by_sheet.items():
+        rows: dict[int, list[dict[str, Any]]] = {}
+        for cell in sheet_cells:
+            row = cell.get("row")
+            if isinstance(row, int):
+                rows.setdefault(row, []).append(cell)
+        identified: dict[str, int] | None = None
+        for row_num in sorted(rows):
+            origin_col: int | None = None
+            dest_col: int | None = None
+            for cell in rows[row_num]:
+                value = cell.get("value")
+                if not isinstance(value, str):
+                    continue
+                normalised = value.strip().lower()
+                col = cell.get("col")
+                if not isinstance(col, int):
+                    continue
+                if origin_col is None and normalised in _ORIGIN_LABELS:
+                    origin_col = col
+                elif dest_col is None and normalised in _DESTINATION_LABELS:
+                    dest_col = col
+            if origin_col is not None and dest_col is not None:
+                identified = {
+                    "origin_col": origin_col,
+                    "destination_col": dest_col,
+                    "header_row": row_num,
+                }
+                break
+        if identified is None:
+            # Per Directive 1: ANY sheet without identifiable headers fails the
+            # whole workbook over to fallback. A partial-scan creates a silent
+            # correctness trap.
+            return None
+        column_map[sheet_title] = identified
+    return column_map
+
+
+def _scan_cells_for_shape_violators(
+    cells: list[dict[str, Any]],
+    column_map: dict[str, dict[str, int]],
+) -> tuple[list[dict[str, Any]], list[ShapeViolatingLane]]:
+    """Lift shape-violating rows out of the cell list before Flash sees them.
+
+    Phase 9 §6.1 / Build Directive 2 (Defect 21): every cell on a violating
+    `(sheet, row)` is removed from the surviving cell list. Flash physically
+    cannot re-report a row it never saw, so the post-LLM `_pre_scan_shape_violators`
+    is expected to return an empty list for rows handled here — the union
+    dedup is belt-and-suspenders.
+
+    The cell list already carries true coordinates from `_build_cell_list`, so
+    the lifted `ShapeViolatingLane` inherits real Excel provenance natively
+    (Build Directive 1 from Phase 8 satisfied without positional synthesis).
+    """
+    violating_rows: dict[tuple[str, int], dict[str, dict[str, Any]]] = {}
+    for cell in cells:
+        sheet = cell.get("sheet")
+        row = cell.get("row")
+        col = cell.get("col")
+        if not isinstance(sheet, str) or not isinstance(row, int) or not isinstance(col, int):
+            continue
+        slots = column_map.get(sheet)
+        if slots is None:
+            continue
+        if row <= slots["header_row"]:
+            continue
+        role: str | None = None
+        if col == slots["origin_col"]:
+            role = "origin"
+        elif col == slots["destination_col"]:
+            role = "destination"
+        if role is None:
+            continue
+        value = cell.get("value")
+        text = str(value) if value is not None else ""
+        if _UNLOCODE_SHAPE.match(text):
+            continue
+        slot = violating_rows.setdefault((sheet, row), {})
+        slot[role] = cell
+
+    if not violating_rows:
+        return cells, []
+
+    violators: list[ShapeViolatingLane] = []
+    for (sheet, row), role_cells in sorted(violating_rows.items()):
+        origin_cell = role_cells.get("origin")
+        dest_cell = role_cells.get("destination")
+        # The anchor coord must come from a VIOLATING cell — pin it before the
+        # recovery loop fills in the non-violating side.
+        anchor_cell = origin_cell or dest_cell
+        # Recover whichever side wasn't a violator from the original cells so
+        # `raw_*_code` reflects what was actually in the spreadsheet.
+        slots = column_map[sheet]
+        if origin_cell is None or dest_cell is None:
+            for cell in cells:
+                if cell.get("sheet") != sheet or cell.get("row") != row:
+                    continue
+                if origin_cell is None and cell.get("col") == slots["origin_col"]:
+                    origin_cell = cell
+                elif dest_cell is None and cell.get("col") == slots["destination_col"]:
+                    dest_cell = cell
+        assert anchor_cell is not None  # at least one violator side is present
+        origin_value = str(origin_cell.get("value", "")) if origin_cell else ""
+        dest_value = str(dest_cell.get("value", "")) if dest_cell else ""
+        # Bound raw_*_code to ShapeViolatingLane's max_length=64 field.
+        violators.append(
+            ShapeViolatingLane(
+                lane_id=f"shape_violator_{sheet}_{row}"[:64],
+                raw_origin_code=(origin_value or " ")[:64],
+                raw_destination_code=(dest_value or " ")[:64],
+                source_row_reference=SourceRow(
+                    sheet_name=str(sheet)[:64] or "Rates",
+                    row_number=row,
+                    cell_reference=str(anchor_cell.get("coord") or f"A{row}"),
+                ),
+            )
+        )
+
+    surviving = [
+        cell for cell in cells if (cell.get("sheet"), cell.get("row")) not in violating_rows
+    ]
+    return surviving, violators
+
+
 class ExcelTooLargeError(Exception):
     """Raised when the workbook exceeds the Phase 2 cell cap (5,000)."""
 
@@ -261,6 +441,19 @@ async def extract_excel_payload(
     failure or schema-violating model output.
     """
     cells = await asyncio.to_thread(_build_cell_list, file_path)
+    cell_count_for_metadata = len(cells)
+
+    # Phase 9 §6.1 (Defect 21): deterministic pre-LLM shape scan on labeled-
+    # column workbooks. The cell list already carries true coordinates from
+    # `_build_cell_list`, so lifted violators inherit real Excel provenance
+    # without positional synthesis. When `_identify_port_columns` returns
+    # `None` (any sheet lacks identifiable origin/destination headers), the
+    # workbook falls back to the Phase 8 post-LLM path verbatim.
+    column_map = _identify_port_columns(cells)
+    pre_llm_violators: list[ShapeViolatingLane] = []
+    if column_map is not None:
+        cells, pre_llm_violators = _scan_cells_for_shape_violators(cells, column_map)
+
     contents = _build_prompt(job_id, prospect_id, cells)
     client = get_vertex_client(settings)
     response = await _generate_with_retry(client, contents, get_response_schema())
@@ -274,7 +467,7 @@ async def extract_excel_payload(
         extractor_model=cast(Literal["gemini-3.1-flash-lite"], _MODEL_ID),
         extracted_at=extracted_at,
         prompt_version=PROMPT_VERSION,
-        cell_count=len(cells),
+        cell_count=cell_count_for_metadata,
     )
 
     # Overwrite extractor-supplied identifiers with the authoritative ones.
@@ -283,13 +476,27 @@ async def extract_excel_payload(
     body["extraction_metadata"] = metadata.model_dump(mode="json")
     body["schema_version"] = "onramp.v1"
 
-    # Phase 8 §6.1 (Defect 19): pre-scan body["lanes"] for shape-violators
-    # BEFORE the force-overwrite and BEFORE `model_validate`. The pre-scan
-    # mutates body["lanes"] in place (surviving lanes only) and returns the
-    # lifted violators, which are routed to Stage 4 R1 via the new
-    # `shape_violating_lanes` field on NormalizedRatesheet.
+    # Phase 8 §6.1 (Defect 19): post-LLM pre-scan, retained as fallback after
+    # Phase 9 moved the primary path upstream of Flash. When the pre-LLM scan
+    # ran (column_map was not None), Flash never saw the violating rows so
+    # this call is expected to return an empty list — the union/dedup below
+    # is belt-and-suspenders per Build Directive 2. When the pre-LLM path
+    # punted (column_map was None), this is the sole detector.
     sheet_label = "Rates"
-    shape_violating = _pre_scan_shape_violators(body, sheet_label)
+    post_llm_violators = _pre_scan_shape_violators(body, sheet_label)
+
+    # Phase 9 §6.1: union the two violator sources, deduped by
+    # (sheet_name, row_number) from source_row_reference — robust against
+    # lane_id divergence between pre-LLM synthetic IDs and any Flash-supplied
+    # IDs the post-LLM path may carry.
+    seen_rows: set[tuple[str, int]] = set()
+    shape_violating: list[ShapeViolatingLane] = []
+    for v in (*pre_llm_violators, *post_llm_violators):
+        key = (v.source_row_reference.sheet_name, v.source_row_reference.row_number)
+        if key in seen_rows:
+            continue
+        seen_rows.add(key)
+        shape_violating.append(v)
 
     # Phase 7 §6.1.1 (Defect 18a): force-overwrite, not setdefault. The Stage 2
     # LLM occasionally smuggles non-empty values into these fields with
