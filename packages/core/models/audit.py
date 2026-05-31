@@ -2,6 +2,14 @@
 
 Append-only at the application layer (database-level role enforcement is
 Phase 6 per ULTIMATE_PRD §3.10.4).
+
+Phase 9.1 (Defect 22): the `AuditLogEntry` vocabulary (`AuditAction` + `actor`)
+is reconciled to the live pipeline writer (`packages/ingest/tasks.py:_audit_row`,
+Phase 7 §6.3), the sole producer of `OnrampAuditLog` rows. The original Phase 4
+§3.1 placeholder vocabulary was never written and made the audit read endpoint
+return HTTP 422 on every real job. The `AccessLogEntry`/`AuditRoute` path has no
+row writer and no reader endpoint, so it is left as-is (only `/internal/v1/audit/{id}`
+is ever emitted, and it is already in the Literal).
 """
 
 from __future__ import annotations
@@ -11,16 +19,20 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+# Phase 9.1 (Defect 22): EXACTLY the values the live writer puts in
+# `OnrampAuditLog.action` — four success transitions plus three failure
+# transitions emitted by `_commit_failure`. One coherent vocabulary, not two:
+# the old `*_complete` long-forms were never written and are deleted. The
+# `ingress_received` stage exists only in an outbox payload, never an audit row,
+# so it is intentionally absent here.
 AuditAction = Literal[
-    "ingress_received",
-    "classify_complete",
-    "extract_complete",
-    "normalize_complete",
-    "validate_complete",
-    "correction_triggered",
-    "clarification_drafted",
-    "result_delivered",
-    "review_acknowledged",
+    "classified",
+    "extracted",
+    "normalized",
+    "validated",
+    "extract_failed",
+    "normalize_failed",
+    "validate_failed",
 ]
 
 AuditRoute = Literal[
@@ -37,7 +49,9 @@ class AuditLogEntry(BaseModel):
 
     audit_id: int = Field(ge=1)
     job_id: str = Field(min_length=1, max_length=64)
-    actor: Literal["system", "operator", "external_webhook"]
+    # Phase 9.1 (Defect 22): the worker is the sole writer of audit rows
+    # (Phase 7 §6.3); `actor_principal` stays a free str ("pipeline-task").
+    actor: Literal["worker"]
     action: AuditAction
     payload: dict[str, Any]
     actor_principal: str = Field(max_length=128)
