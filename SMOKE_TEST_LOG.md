@@ -218,3 +218,27 @@ Rough estimate **$3-7 USD** for the partial Run 1. Bulk of Pro calls returned 20
 The compose stack runs end-to-end through Stage 2 extraction. Stage 3 normalization is both structurally too slow for the F.3 budget and has a stuck-state defect on transient errors. Demo recording remains blocked.
 
 Next: human review of `HUMAN_INTERVENTION_REQUEST_V2.md` and decisions on Defects 6 + 7.
+
+---
+
+## Step 4 V11 — F.4 PASSED, F.5 HALTED on Defect 22 (2026-05-31)
+
+Phase 9 post-closure smoke at HEAD `45a024a`. Stack rebuilt clean on Phase 9 code; `/v1/health` healthy (4/4 validators). Pre-flight confirmed real fixture headers `origin`/`destination` match the pre-LLM scan label set, and the deployed image carries `_scan_cells_for_shape_violators` + `stage2.excel.v2`.
+
+### Stage F.4 — broken_impossible_port_codes — ✅ PASS
+
+Job `7c042249a37b40379301a45b9e7b6116`, `completed` in 42 s. Defect 21 closed LIVE: with Flash returning only clean lanes (V10 behaviour), the deterministic pre-LLM scan still lifted 2 shape-violators with real coords — `A4` `ZZ@ZZ` (origin) + `B6` `QQ@QQ` (destination) — both emitting canonical `port_unknown_unlocode` R1 rejections with full Phase 6.9 provenance. `prompt_version=stage2.excel.v2`, `cell_count=36`. lane_ids `shape_violator_Rates_4/6` confirm the deterministic path fired independent of Flash. Row accounting: 2 clean→lanes, 1 shape-valid/unresolved→flagged (`port_obfuscation_unresolved`, Phase 7 §6.1.3 carve-out, unchanged), 2 violators→rejected. No `INVALID_PORT_CODE`.
+
+### Stage F.5 — audit trail — ❌ HALT (Defect 22)
+
+Auth gating OK (no-auth 403; admin-token + fake job 404). Audit **data correct**: 4 rows (`classified/extracted/normalized/validated`, `actor=worker`, `actor_principal=pipeline-task`, payload + ts present, no PII). But `GET /internal/v1/audit/<bare-hex job_id>` returns **HTTP 422** — `response_model=list[AuditLogEntry]` (Phase 4 §3.1) rejects the worker-written vocabulary (`actor="worker"` ∉ {system,operator,external_webhook}; `action="classified"` ∉ the `*_complete` AuditAction set). Pre-existing Phase 4↔Phase 7 §6.3 schema drift, NOT a Phase 9 change (audit.py / audit model / tasks.py absent from the Phase 9 diff); first exercised here because F.5 was never reached before. Full analysis + fix options in `HUMAN_INTERVENTION_REQUEST_V11.md`.
+
+### Vertex AI cost
+
+< $1 (one 36-cell Flash extraction + small Pro normalization pass). Well under the $5 ceiling.
+
+### Demo recording — NOT AUTHORIZED
+
+F.4 passed but F.5 is blocked by Defect 22. Demo gated until the audit-schema reconciliation lands and F.5 re-runs green against the existing BPC job (no new Vertex spend needed).
+
+Next: human decision on Defect 22 (Option A/B/C in `HUMAN_INTERVENTION_REQUEST_V11.md`), patch + unit tests, re-run F.5 only.
